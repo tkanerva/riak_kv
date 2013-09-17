@@ -509,7 +509,11 @@ value_size(Value) -> size(term_to_binary(Value)).
 %% @doc Convert riak object to binary form
 -spec to_binary(binary_version(), riak_object()) -> binary().
 to_binary(v0, RObj) ->
-    term_to_binary(RObj);
+    Contents = get_contents(RObj),
+    NewContents = [{maybe_convert_metadata_to_dict(MD), V}
+                   ||{MD, V} <- Contents],
+    DObj = RObj#r_object{contents = NewContents},
+    term_to_binary(DObj);
 to_binary(v1, #r_object{contents=Contents, vclock=VClock}) ->
     new_v1(VClock, Contents).
 
@@ -531,10 +535,28 @@ to_binary_version(Vsn, _B, _K, Obj = #r_object{}) ->
 binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
+maybe_convert_metadata_to_orddict(D) when is_tuple(D) andalso 
+                                          element(1, D) =:= dict ->
+    orddict:from_list(dict:to_list(D));
+maybe_convert_metadata_to_orddict(O) when is_tuple(O) andalso 
+                                          element(1, O) =:= orddict->
+    O.
+
+maybe_convert_metadata_to_dict(D) when is_tuple(D) andalso 
+                                       element(1, D) =:= dict ->
+    D;
+maybe_convert_metadata_to_dict(O) when is_tuple(O) andalso 
+                                       element(1, O) =:= orddict->
+    dict:from_list(orddict:to_list(O)).
+
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) -> riak_object().
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
-    binary_to_term(ObjTerm);
+    RObj = binary_to_term(ObjTerm),
+    Contents = get_contents(RObj),
+    NewContents = [{maybe_convert_metadata_to_orddict(MD), V}
+                   ||{MD, V} <- Contents],
+    RObj#r_object{contents = NewContents};
 from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of

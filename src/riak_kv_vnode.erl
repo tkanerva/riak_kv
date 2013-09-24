@@ -124,7 +124,7 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  counter_op = undefined :: undefined | integer() %% if set this is a counter operation
+                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -258,10 +258,9 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
                                    riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
+    Req = riak_core_util:make_fold_req(Fun, Acc0),
     riak_core_vnode_master:sync_spawn_command(Preflist,
-                                              ?FOLD_REQ{
-                                                 foldfun=Fun,
-                                                 acc0=Acc0},
+                                              Req,
                                               riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
@@ -475,7 +474,15 @@ handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
     do_delete(BKey, ReqId, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
-handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
+handle_command(#riak_core_fold_req_v1{} = ReqV1,
+               Sender, State) ->
+    %% Use make_fold_req() to upgrade to the most recent ?FOLD_REQ
+    handle_command(riak_core_util:make_fold_req(ReqV1), Sender, State);
+handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
+                         forwardable=_Forwardable, opts=Opts}, Sender, State) ->
+    %% The riak_core layer takes care of forwarding/not forwarding, so
+    %% we ignore forwardable here.
+    %%
     %% The function in riak_core used for object folding expects the
     %% bucket and key pair to be passed as the first parameter, but in
     %% riak_kv the bucket and key have been separated. This function
@@ -483,7 +490,7 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
     FoldWrapper = fun(Bucket, Key, Value, Acc) ->
                           FoldFun({Bucket, Key}, Value, Acc)
                   end,
-    do_fold(FoldWrapper, Acc0, Sender, State);
+    do_fold(FoldWrapper, Acc0, Sender, Opts, State);
 
 %% entropy exchange commands
 handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
@@ -918,7 +925,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
-    CounterOp = proplists:get_value(counter_op, Options, undefined),
+    CRDTOp = proplists:get_value(crdt_op, Options, undefined),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -928,7 +935,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       counter_op = CounterOp},
+                       crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -990,7 +997,8 @@ prepare_put(State=#state{vnodeid=VId,
     end.
 prepare_put(#state{vnodeid=VId,
                    mod=Mod,
-                   modstate=ModState},
+                   modstate=ModState,
+                   idx=Idx},
             PutArgs=#putargs{bkey={Bucket, Key},
                              robj=RObj,
                              bprops=BProps,
@@ -998,7 +1006,7 @@ prepare_put(#state{vnodeid=VId,
                              lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime,
-                             counter_op = CounterOp},
+                             crdt_op = CRDTOp},
             IndexBackend) ->
     GetReply =
         case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1015,8 +1023,14 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CounterOp),
-            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
+            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+                {error, _}=E ->
+                    {{fail, Idx, E}, PutArgs}; %% NOTE subverts ReqId to Error
+                ObjToStore ->
+                    {{true, ObjToStore},
+                     PutArgs#putargs{index_specs=IndexSpecs,
+                                     is_index=IndexBackend}}
+            end;
         {ok, OldObj} ->
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
@@ -1040,34 +1054,40 @@ prepare_put(#state{vnodeid=VId,
                                                                              PruneTime,
                                                                              BProps))
                     end,
-                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore),
-                    {{true, ObjToStore2},
-                     PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
+                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
+                        {error, _}=E ->
+                            {{fail, Idx, E}, PutArgs};%% NOTE subverts ReqId to Error
+                        ObjToStore2 ->
+                            {{true, ObjToStore2},
+                             PutArgs#putargs{index_specs=IndexSpecs,
+                                             is_index=IndexBackend}}
+                    end
             end
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_new_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a _NEW_ counter operation means
-    %% creating + incrementing the counter.
-    %% Make a new counter, stuff it in the riak_object
-    riak_kv_counter:update(VClockUp, VId, CounterOp);
-prepare_new_put(true, RObj, VId, StartTime, _CounterOp) ->
+prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
+prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
+    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+    %% coordinating a _NEW_ crdt operation means
+    %% creating + updating the crdt.
+    %% Make a new crdt, stuff it in the riak_object
+    riak_kv_crdt:update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
 
-handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
-    riak_kv_counter:update(RObj, VId, CounterOp);
-handle_counter(false, CounterOp, _Vid, RObj) when is_integer(CounterOp) ->
-    %% non co-ord put, merge the values if there are siblings
-    %% 'cos that is the point of CRDTs / counters: no siblings
-    riak_kv_counter:merge(RObj);
-handle_counter(_Coord, _CounterOp, _VId, RObj) ->
-    %% i.e. not a counter op
-    RObj.
+handle_crdt(_, undefined, _VId, RObj) ->
+    RObj;
+handle_crdt(true, CRDTOp, VId, RObj) ->
+    riak_kv_crdt:update(RObj, VId, CRDTOp);
+handle_crdt(false, _CRDTOp, _Vid, RObj) ->
+    %% non co-ord put that was a CRDT operation? Merge the values if
+    %% there are siblings 'cos that is the point of CRDTs: no siblings
+    riak_kv_crdt:merge(RObj).
 
+perform_put({fail, _, _}=Reply, State, _PutArgs) ->
+    {Reply, State};
 perform_put({false, Obj},
             #state{idx=Idx}=State,
             #putargs{returnbody=true,
@@ -1365,16 +1385,16 @@ do_delete(BKey, ReqId, State) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, State=#state{async_folding=AsyncFolding,
-                                        mod=Mod,
-                                        modstate=ModState}) ->
+do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
+                                                 mod=Mod,
+                                                 modstate=ModState}) ->
     {ok, Capabilities} = Mod:capabilities(ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
     case AsyncFolding andalso AsyncBackend of
         true ->
-            Opts = [async_fold];
+            Opts = [async_fold|ReqOpts];
         false ->
-            Opts = []
+            Opts = ReqOpts
     end,
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->

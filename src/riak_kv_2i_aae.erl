@@ -40,6 +40,14 @@
 start_partition_repair(Partitions, DutyCycle)
   when is_number(DutyCycle),
        DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
+    Ref = make_ref,
+    From = case length(Partitions) of
+               1 ->
+                   {Ref, self()};
+               _ ->
+                   undefined
+           end,
+    Pid =
     spawn(
       fun() ->
               %% Poor man's lock on this operation.
@@ -51,7 +59,8 @@ start_partition_repair(Partitions, DutyCycle)
                   lists:foldl(
                     fun(Partition, Errors) ->
                             case (catch repair_partition(Partition,
-                                                         DutyCycle)) of
+                                                         DutyCycle,
+                                                         From)) of
                                 ok ->
                                     Errors;
                                 {error, Err} ->
@@ -72,55 +81,77 @@ start_partition_repair(Partitions, DutyCycle)
                       lager:error("Could not complete 2i repair for partitions ~p",
                                   [Partitions])
               end
-      end).
-
-repair_partition(Partition, DutyCycle)
-  when is_number(DutyCycle),
-       DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
-    lager:info("Repairing 2i indexes in partition ~p", [Partition]),
-    case create_index_data_db(Partition, DutyCycle) of
-        {ok, {DBDir, DBRef}} ->
-            Res =
-            case build_tmp_tree(Partition, DBRef, DutyCycle) of
-                {ok, TmpTree} ->
-                    Res0 =
-                    case riak_kv_vnode:hashtree_pid(Partition) of
-                        {ok, TreePid} ->
-                            run_exchange(Partition, DBRef, TmpTree, TreePid);
-                        _ ->
-                            {error, no_tree_for_partition}
-                    end,
-                    remove_tmp_tree(Partition, TmpTree),
-                    Res0;
-                Err ->
-                    Err
-            end,
-            destroy_index_data_db(DBDir, DBRef),
-            lager:info("Finished repairing indexes in partition ~p", [Partition]),
-            Res;
-        Err ->
-            Err
+      end),
+    case length(Partitions) of
+        1 ->
+            %% Wait for lock to be acquired to notify user immediately
+            Mon = monitor(process, Pid),
+            receive
+                {Ref, lock_acquired} ->
+                    {ok, Pid};
+                {Ref, lock_failed} ->
+                    {error, lock_failed};
+                {'DOWN', Mon, _, _, Reason} ->
+                    {error, Reason}
+            end;
+        _ ->
+            {ok, Pid}
     end.
 
-%% @doc Run exchange between temporary 2i hashtree and a vnode's 2i hashtree.
-run_exchange(Partition, DBRef, TmpTree, TreePid) ->
-    lager:info("Reconciling 2i data"),
-    Self = self(),
-    Ref = make_ref(),
-    WorkerPid =
-    spawn(
-      fun() ->
-              WRes = do_exchange(Partition, DBRef, TmpTree, TreePid),
-              Self ! {Ref, WRes}
-      end),
-    Mon = monitor(process, WorkerPid),
-    receive
-        {'DOWN', Mon, process, WorkerPid, Reason} ->
-            lager:error("2i repair worker failed : ~p", [Reason]),
-            {error, Reason};
-        {Ref, WRes} ->
-            demonitor(Mon, [flush]),
-            WRes
+repair_partition(Partition, DutyCycle) ->
+    repair_partition(Partition, DutyCycle, undefined).
+
+repair_partition(Partition, DutyCycle, From)
+  when is_number(DutyCycle),
+       DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
+    case riak_kv_vnode:hashtree_pid(Partition) of
+        {ok, TreePid} ->
+            WorkerFun =
+            fun() ->
+                    repair_partition(Partition, DutyCycle, From, TreePid)
+            end,
+            run_worker("2i repair", WorkerFun);
+        _ ->
+            {error, no_tree_for_partition}
+    end.
+
+repair_partition(Partition, DutyCycle, From, TreePid) ->
+    case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of 
+        ok ->
+            lager:info("Hashtree lock acquired"),
+            case From of
+                undefined ->
+                    ok;
+                {Ref, Parent} ->
+                    Parent ! {Ref, lock_acquired}
+            end,
+            lager:info("Repairing 2i indexes in partition ~p", [Partition]),
+            case create_index_data_db(Partition, DutyCycle) of
+                {ok, {DBDir, DBRef}} ->
+                    Res =
+                    case build_tmp_tree(Partition, DBRef, DutyCycle) of
+                        {ok, TmpTree} ->
+                            Res0 = do_exchange(Partition, DBRef, TmpTree, TreePid),
+                            remove_tmp_tree(Partition, TmpTree),
+                            Res0;
+                        BuildTreeErr ->
+                            BuildTreeErr
+                    end,
+                    destroy_index_data_db(DBDir, DBRef),
+                    lager:info("Finished repairing indexes in partition ~p", [Partition]),
+                    Res;
+                CreateDBErr ->
+                    CreateDBErr
+            end;
+        LockErr ->
+            lager:error("Failed to acquire hashtree lock"),
+            case From of
+                undefined ->
+                    ok;
+                {Ref, Parent} ->
+                    Parent ! {Ref, lock_failed}
+            end,
+            LockErr
     end.
 
 %% No wait for speed 100, wait equal to work time when speed is 50,
@@ -296,43 +327,39 @@ remove_tmp_tree(Partition, Tree) ->
 
 %% @doc Run exchange between the temporary 2i tree and the vnode's 2i tree.
 do_exchange(Partition, DBRef, TmpTree, TreePid) ->
-    case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
-        ok ->
-            IndexN2i = riak_kv_index_hashtree:index_2i_n(),
-            lager:debug("Updating the vnode tree"),
-            ok = riak_kv_index_hashtree:update(IndexN2i, TreePid),
-            lager:debug("Updating the temporary 2i AAE tree"),
-            {_, TmpTree2} = hashtree:update_snapshot(TmpTree),
-            TmpTree3 = hashtree:update_perform(TmpTree2),
-            Remote =
-            fun(get_bucket, {L, B}) ->
-                    R1 = riak_kv_index_hashtree:exchange_bucket(IndexN2i, L, B,
-                                                                TreePid),
-                    R1;
-               (key_hashes, Segment) ->
-                    R2 = riak_kv_index_hashtree:exchange_segment(IndexN2i, Segment,
-                                                                 TreePid),
-                    R2;
-               (A, B) ->
-                    throw({riak_kv_2i_aae_internal_error, A, B})
-            end,
-            AccFun =
-            fun(KeyDiff, Acc) ->
-                    lists:foldl(
-                      fun({_DiffReason, BKeyBin}, Count) ->
-                              BK = binary_to_term(BKeyBin),
-                              IdxData = fetch_index_data(BKeyBin, DBRef),
-                              riak_kv_vnode:refresh_index_data(Partition, BK, IdxData),
-                              Count + 1
-                      end,
-                      Acc, KeyDiff)
-            end,
-            NumDiff = hashtree:compare(TmpTree3, Remote, AccFun, 0),
-            lager:info("Found ~p differences", [NumDiff]),
-            ok;
-        LockErr ->
-            {error, LockErr}
-    end.
+    lager:info("Reconciling 2i data"),
+    IndexN2i = riak_kv_index_hashtree:index_2i_n(),
+    lager:debug("Updating the vnode tree"),
+    ok = riak_kv_index_hashtree:update(IndexN2i, TreePid),
+    lager:debug("Updating the temporary 2i AAE tree"),
+    {_, TmpTree2} = hashtree:update_snapshot(TmpTree),
+    TmpTree3 = hashtree:update_perform(TmpTree2),
+    Remote =
+    fun(get_bucket, {L, B}) ->
+            R1 = riak_kv_index_hashtree:exchange_bucket(IndexN2i, L, B,
+                                                        TreePid),
+            R1;
+       (key_hashes, Segment) ->
+            R2 = riak_kv_index_hashtree:exchange_segment(IndexN2i, Segment,
+                                                         TreePid),
+            R2;
+       (A, B) ->
+            throw({riak_kv_2i_aae_internal_error, A, B})
+    end,
+    AccFun =
+    fun(KeyDiff, Acc) ->
+            lists:foldl(
+              fun({_DiffReason, BKeyBin}, Count) ->
+                      BK = binary_to_term(BKeyBin),
+                      IdxData = fetch_index_data(BKeyBin, DBRef),
+                      riak_kv_vnode:refresh_index_data(Partition, BK, IdxData),
+                      Count + 1
+              end,
+              Acc, KeyDiff)
+    end,
+    NumDiff = hashtree:compare(TmpTree3, Remote, AccFun, 0),
+    lager:info("Found ~p differences", [NumDiff]),
+    ok.
 
 
 get_hashtree_lock(TreePid, Retries) ->
@@ -347,4 +374,23 @@ get_hashtree_lock(TreePid, Retries) ->
             end;
         Reply ->
             Reply
+    end.
+
+%% @doc Runs a given worker function in a new process and forwards its
+%% return value.
+run_worker(Name, WorkerFun) ->
+    Self = self(),
+    Ref = make_ref(),
+    WorkerPid = spawn(fun() ->
+                              Res = WorkerFun(),
+                              Self ! {Ref, Res}
+                      end),
+    Mon = monitor(process, WorkerPid),
+    receive
+        {'DOWN', Mon, process, WorkerPid, Reason} ->
+            lager:error("~s worker failed : ~p", [Name, Reason]),
+            {error, {worker_crashed, Reason}};
+        {Ref, WRes} ->
+            demonitor(Mon, [flush]),
+            WRes
     end.

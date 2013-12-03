@@ -442,8 +442,13 @@ repair_2i(Args) ->
         {ok, IdxList, DutyCycle} ->
             io:format("Will repair 2i on these partitions:\n", []),
             [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
-            riak_kv_2i_aae:start_partition_repair(IdxList, DutyCycle),
-            io:format("Watch the logs for 2i repair progress reports\n", []);
+            Ret = riak_kv_2i_aae:start_partition_repair(IdxList, DutyCycle),
+            case Ret of
+                {ok, _Pid} ->
+                    io:format("Watch the logs for 2i repair progress reports\n", []);
+                {error, Reason} ->
+                    io:format("Error running 2i repair : ~p\n", [Reason])
+            end;
         {error, Reason} ->
             io:format("Error: ~p\n", [Reason]),
             io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),

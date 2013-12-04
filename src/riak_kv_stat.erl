@@ -184,6 +184,17 @@ do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
 do_update({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
+do_update({vnode_dt_update, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
+do_update({riak_object_merge, undefined,  Micros}) ->
+    folsom_metrics:notify_existing_metric({?APP, object, merge}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, object, merge, time}, Micros, histogram);
+do_update({riak_object_merge, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, object, Type, merge}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, object, Type, merge, time}, Micros, histogram);
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
@@ -397,6 +408,12 @@ stats() ->
      {[vnode, index, writes, postings], spiral},
      {[vnode, index, deletes], spiral},
      {[vnode, index, deletes, postings], spiral},
+     {[vnode, counter, update], spiral},
+     {[vnode, counter, update, time], histogram},
+     {[vnode, set, update], spiral},
+     {[vnode, set, update, time], histogram},
+     {[vnode, map, update], spiral},
+     {[vnode, map, update, time], histogram},
      {[node, gets], spiral},
      {[node, gets, fsm, active], counter},
      {[node, gets, fsm, errors], spiral},
@@ -443,7 +460,15 @@ stats() ->
       {function, {function, ?MODULE, leveldb_read_block_errors}}},
      {[counter, actor_count], histogram},
      {[set, actor_count], histogram},
-     {[map, actor_count], histogram}
+     {[map, actor_count], histogram},
+     {[object, merge], spiral},
+     {[object, merge, time], histogram},
+     {[object, counter, merge], spiral},
+     {[object, counter, merge, time], histogram},
+     {[object, set, merge], spiral},
+     {[object, set, merge, time], histogram},
+     {[object, map, merge], spiral},
+     {[object, map, merge, time], histogram}
     ].
 
 %% @doc register a stat with folsom
@@ -582,6 +607,17 @@ stats_from_update_arg({vnode_index_write, _, _}) ->
         riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
 stats_from_update_arg({vnode_index_delete, _}) ->
     riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_dt_update, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, vnode, Type, update}, {metric, [], spiral, undefined}},
+     {{?APP, vnode, Type, update, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({riak_object_merge, undefined, _}) ->
+    [{{?APP, object, merge}, {metric, [], spiral, undefined}},
+     {{?APP, object, merge, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({riak_object_merge, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, object, Type, merge}, {metric, [], spiral, undefined}},
+     {{?APP, object, Type, merge, time}, {metric, [], histogram, undefined}}];
 stats_from_update_arg({get_fsm, _, _, _, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, gets]);
 stats_from_update_arg({put_fsm_time, _, _, _, _}) ->

@@ -438,30 +438,46 @@ run_reformat(M, F, A) ->
     end.
 
 repair_2i(Args) ->
-    case parse_repair_2i_args(Args) of
+    case validate_repair_2i_args(Args) of
         {ok, IdxList, DutyCycle} ->
             io:format("Will repair 2i on these partitions:\n", []),
             [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
             Ret = riak_kv_2i_aae:start_partition_repair(IdxList, DutyCycle),
             case Ret of
                 {ok, _Pid} ->
-                    io:format("Watch the logs for 2i repair progress reports\n", []);
+                    io:format("Watch the logs for 2i repair progress reports\n", []),
+                    ok;
+                {error, {lock_failed, not_built}} ->
+                    io:format("Error: The AAE tree for that partition has not been built yet\n", []),
+                    error;
                 {error, Reason} ->
-                    io:format("Error running 2i repair : ~p\n", [Reason])
+                    io:format("Error running 2i repair : ~p\n", [Reason]),
+                    error
             end;
+        {error, aae_disabled} ->
+            io:format("Error: AAE is currently not enabled\n", []),
+            error;
         {error, Reason} ->
             io:format("Error: ~p\n", [Reason]),
             io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
             io:format("Speed defaults to 100 (full speed).\n", []),
             io:format("If no partitions are given, all partitions in the\n" ++
                       "node are repaired.\n", []),
-            ok
+            error
     end.
 
 
 %%%===================================================================
 %%% Private
 %%%===================================================================
+
+validate_repair_2i_args(Args) ->
+    case riak_kv_entropy_manager:enabled() of
+        true ->
+            parse_repair_2i_args(Args);
+        false ->
+            {error, aae_disabled}
+    end.
 
 parse_repair_2i_args(["--speed", DutyCycleStr | Partitions]) ->
     DutyCycle = parse_int(DutyCycleStr),

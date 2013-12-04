@@ -87,10 +87,10 @@ start_partition_repair(Partitions, DutyCycle)
             %% Wait for lock to be acquired to notify user immediately
             Mon = monitor(process, Pid),
             receive
-                {Ref, lock_acquired} ->
+                {Ref, ok} ->
                     {ok, Pid};
-                {Ref, lock_failed} ->
-                    {error, lock_failed};
+                {Ref, {error, ImmErr}} ->
+                    {error, ImmErr};
                 {'DOWN', Mon, _, _, Reason} ->
                     {error, Reason}
             end;
@@ -112,19 +112,24 @@ repair_partition(Partition, DutyCycle, From)
             end,
             run_worker("2i repair", WorkerFun);
         _ ->
-            {error, no_tree_for_partition}
+            Err = {error, no_tree_for_partition},
+            notify_caller(From, Err),
+            Err
+    end.
+
+notify_caller(From, Msg) ->
+    case From of
+        undefined ->
+            ok;
+        {Ref, Parent} ->
+            Parent ! {Ref, Msg}
     end.
 
 repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of 
         ok ->
             lager:info("Hashtree lock acquired"),
-            case From of
-                undefined ->
-                    ok;
-                {Ref, Parent} ->
-                    Parent ! {Ref, lock_acquired}
-            end,
+            notify_caller(From, ok),
             lager:info("Repairing 2i indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
                 {ok, {DBDir, DBRef}} ->
@@ -145,12 +150,7 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
             end;
         LockErr ->
             lager:error("Failed to acquire hashtree lock"),
-            case From of
-                undefined ->
-                    ok;
-                {Ref, Parent} ->
-                    Parent ! {Ref, lock_failed}
-            end,
+            notify_caller(From, {error, {lock_failed, LockErr}}),
             LockErr
     end.
 

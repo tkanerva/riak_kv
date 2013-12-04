@@ -420,7 +420,8 @@ fold_fun(Tree, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(Tree),
     IndexFoldFun = index_fold_fun(Tree),
-    fun(BKey, RObj, _) ->
+    fun(BKey = {Bucket, Key}, BinObj, _) ->
+            RObj = riak_object:from_binary(Bucket, Key, BinObj),
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
             IndexFoldFun(RObj, BinBKey),

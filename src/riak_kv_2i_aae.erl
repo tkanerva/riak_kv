@@ -238,7 +238,6 @@ leveldb_opts() ->
     lists:foldl(fun({K,V}, Cfg) ->
                         orddict:store(K, V, Cfg)
                 end, Config0, ForcedOpts),
-    lager:info("Leveldb options for 2i AAE: ~p", [Config]),
     Config.
 
 duty_cycle_pause(WaitFactor, StartTime) ->

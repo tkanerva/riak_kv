@@ -179,7 +179,7 @@ create_index_data_db(Partition, DutyCycle) ->
 
 create_index_data_db(Partition, DutyCycle, DBDir) ->
     lager:info("Creating temporary database of 2i data in ~s", [DBDir]),
-    DBOpts = [{create_if_missing, true}, {error_if_exists, true}],
+    DBOpts = leveldb_opts(),
     {ok, DBRef} = eleveldb:open(DBDir, DBOpts),
     Client = self(),
     BatchRef = make_ref(),
@@ -226,6 +226,20 @@ create_index_data_db(Partition, DutyCycle, DBDir) ->
                        [NumFound, Partition]),
             {ok, {DBDir, DBRef}}
     end.
+
+leveldb_opts() ->
+    ConfigOpts = app_helper:get_env(riak_kv,
+                                    anti_entropy_leveldb_opts,
+                                    [{write_buffer_size, 20 * 1024 * 1024},
+                                     {max_open_files, 20}]),
+    Config0 = orddict:from_list(ConfigOpts),
+    ForcedOpts = [{create_if_missing, true}, {error_if_exists, true}],
+    Config =
+    lists:foldl(fun({K,V}, Cfg) ->
+                        orddict:store(K, V, Cfg)
+                end, Config0, ForcedOpts),
+    lager:info("Leveldb options for 2i AAE: ~p", [Config]),
+    Config.
 
 duty_cycle_pause(WaitFactor, StartTime) ->
     case WaitFactor > 0 of

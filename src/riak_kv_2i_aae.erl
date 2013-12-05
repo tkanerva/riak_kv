@@ -40,18 +40,25 @@
 start_partition_repair(Partitions, DutyCycle)
   when is_number(DutyCycle),
        DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
+    Parent = self(),
     Ref = make_ref,
     From = case length(Partitions) of
                1 ->
-                   {Ref, self()};
+                   {Ref, Parent};
                _ ->
                    undefined
            end,
     Pid =
     spawn(
       fun() ->
-              %% Poor man's lock on this operation.
-              true = register(riak_kv_2i_aae_repair, self()),
+              try
+                  register(riak_kv_2i_aae_repair, self()),
+                  Parent ! {Ref, riak_kv_2i_aae_registered}
+              catch
+                  error:badarg ->
+                      Parent ! {Ref, riak_kv_2i_aae_already_running},
+                      throw(repair_already_started)
+              end,
               try
                   lager:info("Starting 2i repair at speed ~p for partitions ~p",
                              [DutyCycle, Partitions]),
@@ -82,20 +89,27 @@ start_partition_repair(Partitions, DutyCycle)
                                   [Partitions])
               end
       end),
-    case length(Partitions) of
-        1 ->
-            %% Wait for lock to be acquired to notify user immediately
-            Mon = monitor(process, Pid),
-            receive
-                {Ref, ok} ->
-                    {ok, Pid};
-                {Ref, {error, ImmErr}} ->
-                    {error, ImmErr};
-                {'DOWN', Mon, _, _, Reason} ->
-                    {error, Reason}
+    Mon = monitor(process, Pid),
+    receive
+        {Ref, riak_kv_2i_aae_registered} ->
+            case length(Partitions) of
+                1 ->
+                    %% Wait for lock to be acquired to notify user immediately
+                    receive
+                        {Ref, ok} ->
+                            {ok, Pid};
+                        {Ref, {error, ImmErr}} ->
+                            {error, ImmErr};
+                        {'DOWN', Mon, _, _, Reason} ->
+                            {error, Reason}
+                    end;
+                _ ->
+                    {ok, Pid}
             end;
-        _ ->
-            {ok, Pid}
+        {Ref, riak_kv_2i_aae_already_running} ->
+            {error, already_running};
+        {'DOWN', Mon, _, _, Reason} ->
+            {error, Reason}
     end.
 
 repair_partition(Partition, DutyCycle) ->

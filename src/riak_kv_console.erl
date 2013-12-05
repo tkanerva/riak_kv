@@ -450,6 +450,9 @@ repair_2i(Args) ->
                 {error, {lock_failed, not_built}} ->
                     io:format("Error: The AAE tree for that partition has not been built yet\n", []),
                     error;
+                {error, already_running} ->
+                    io:format("Error: 2i repair is already running. Check the logs for progress\n", []),
+                    error;
                 {error, Reason} ->
                     io:format("Error running 2i repair : ~p\n", [Reason]),
                     error
@@ -461,7 +464,7 @@ repair_2i(Args) ->
             io:format("Error: ~p\n", [Reason]),
             io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
             io:format("Speed defaults to 100 (full speed).\n", []),
-            io:format("If no partitions are given, all partitions in the\n" ++
+            io:format("If no partitions are given, all partitions in the\n"
                       "node are repaired.\n", []),
             error
     end.

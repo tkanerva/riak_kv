@@ -437,6 +437,37 @@ run_reformat(M, F, A) ->
                         [Err, Reason])
     end.
 
+repair_2i(["status"]) ->
+    case whereis(riak_kv_2i_aae_repair) of
+        Pid when is_pid(Pid) ->
+            io:format("2i repair is running\n"
+                     "Check the logs for progress\n"
+                     "If the process has stalled, you can forcibly stop it by running:\n"
+                     "\triak-admin repair-2i kill\n",
+                     []),
+            ok;
+        undefined ->
+            io:format("2i repair is not currently running\n", []),
+            ok
+    end;
+repair_2i(["kill"]) ->
+    case whereis(riak_kv_2i_aae_repair) of
+        Pid when is_pid(Pid) ->
+            io:format("Will kill current 2i repair process\n", []),
+            Mon = monitor(process, riak_kv_2i_aae_repair),
+            exit(Pid, kill),
+            receive
+                {'DOWN', Mon, _, _, _} ->
+                    lager:info("2i repair process has been killed by user request"),
+                    io:format("The 2i repair process has ceased to be.\n"
+                              "Since it was killed forcibly, you may have to wait some time\n"
+                              "for all internal locks to be released before trying again\n", []),
+                    ok
+            end;
+        undefined ->
+            io:format("2i repair is not currently running\n"),
+            ok
+    end;
 repair_2i(Args) ->
     case validate_repair_2i_args(Args) of
         {ok, IdxList, DutyCycle} ->
@@ -463,12 +494,11 @@ repair_2i(Args) ->
         {error, Reason} ->
             io:format("Error: ~p\n", [Reason]),
             io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
-            io:format("Speed defaults to 100 (full speed).\n", []),
+            io:format("Speed defaults to 100 (full speed)\n", []),
             io:format("If no partitions are given, all partitions in the\n"
-                      "node are repaired.\n", []),
+                      "node are repaired\n", []),
             error
     end.
-
 
 %%%===================================================================
 %%% Private

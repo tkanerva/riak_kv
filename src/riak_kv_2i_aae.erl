@@ -30,6 +30,7 @@
 -define(MAX_DUTY_CYCLE, 100).
 -define(MIN_DUTY_CYCLE, 1).
 -define(LOCK_RETRIES, 10).
+-define(HASHTREE_PID_REQ_TIMEOUT, 30000).
 
 %% @doc Starts a process that will issue a repair for each partition in the
 %% list, sequentially.
@@ -51,6 +52,7 @@ start_partition_repair(Partitions, DutyCycle)
     Pid =
     spawn(
       fun() ->
+              process_flag(trap_exit, true),
               try
                   register(riak_kv_2i_aae_repair, self()),
                   Parent ! {Ref, riak_kv_2i_aae_registered}
@@ -118,17 +120,27 @@ repair_partition(Partition, DutyCycle) ->
 repair_partition(Partition, DutyCycle, From)
   when is_number(DutyCycle),
        DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
-    case riak_kv_vnode:hashtree_pid(Partition) of
+    case request_hashtree_pid(Partition) of
         {ok, TreePid} ->
             WorkerFun =
             fun() ->
                     repair_partition(Partition, DutyCycle, From, TreePid)
             end,
             run_worker("2i repair", WorkerFun);
-        _ ->
-            Err = {error, no_tree_for_partition},
-            notify_caller(From, Err),
-            Err
+        {error, Err} ->
+            notify_caller(From, {error, {can_not_find_tree_for_partition}}),
+            {error, Err}
+    end.
+
+
+request_hashtree_pid(Partition) ->
+    riak_kv_vnode:request_hashtree_pid(Partition),
+    receive
+        {{hashtree_pid, Partition}, Reply} ->
+            Reply
+    after
+        ?HASHTREE_PID_REQ_TIMEOUT ->
+            {error, hashtree_pid_timeout}
     end.
 
 notify_caller(From, Msg) ->
@@ -183,7 +195,16 @@ scan_batch() ->
 %% @doc Create temporary DB holding 2i index data from disk.
 create_index_data_db(Partition, DutyCycle) ->
     DBDir = filename:join(data_root(), "tmp_db"),
-    catch eleveldb:destroy(DBDir, []),
+    LockFile = filename:join(DBDir, "LOCK"),
+    case filelib:is_file(LockFile) of
+        true ->
+            lager:info("Lock file found, deleting"),
+            file:delete(LockFile),
+            lager:info("Lock file supposedly deleted");
+        false ->
+            ok
+    end,
+    (catch eleveldb:destroy(DBDir, [])),
     case filelib:ensure_dir(DBDir) of
         ok ->
             create_index_data_db(Partition, DutyCycle, DBDir);
@@ -194,7 +215,14 @@ create_index_data_db(Partition, DutyCycle) ->
 create_index_data_db(Partition, DutyCycle, DBDir) ->
     lager:info("Creating temporary database of 2i data in ~s", [DBDir]),
     DBOpts = leveldb_opts(),
-    {ok, DBRef} = eleveldb:open(DBDir, DBOpts),
+    case eleveldb:open(DBDir, DBOpts) of
+        {ok, DBRef} ->
+            create_index_data_db(Partition, DutyCycle, DBDir, DBRef);
+        {error, DBErr} ->
+            {error, DBErr}
+    end.
+
+create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
     Client = self(),
     BatchRef = make_ref(),
     WaitFactor = wait_factor(DutyCycle),
@@ -408,10 +436,10 @@ get_hashtree_lock(TreePid, Retries) ->
 run_worker(Name, WorkerFun) ->
     Self = self(),
     Ref = make_ref(),
-    WorkerPid = spawn(fun() ->
-                              Res = WorkerFun(),
-                              Self ! {Ref, Res}
-                      end),
+    WorkerPid = spawn_link( fun() ->
+                                    Res = WorkerFun(),
+                                    Self ! {Ref, Res}
+                            end),
     Mon = monitor(process, WorkerPid),
     receive
         {'DOWN', Mon, process, WorkerPid, Reason} ->

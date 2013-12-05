@@ -556,11 +556,17 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
     end;
 
 handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, modstate=ModState}) ->
-    {async, AsyncWork} = Mod:fold_indexes(FoldIndexFun, Acc, [async_fold], ModState),
-    FinishFun = fun(FinalAcc) ->
-                        riak_core_vnode:reply(Sender, FinalAcc)
-                end,
-    {async, {fold, AsyncWork, FinishFun}, Sender, State};
+    {ok, Caps} = Mod:capabilities(ModState),
+    case lists:member(indexes, Caps) of
+        true ->
+            {async, AsyncWork} = Mod:fold_indexes(FoldIndexFun, Acc, [async_fold], ModState),
+            FinishFun = fun(FinalAcc) ->
+                                riak_core_vnode:reply(Sender, FinalAcc)
+                        end,
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        false ->
+            {reply, {error, {indexes_not_supported, Mod}}, State}
+    end;
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,

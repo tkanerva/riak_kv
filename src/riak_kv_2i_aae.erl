@@ -331,46 +331,31 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
     case filelib:ensure_dir(Path) of
         ok ->
             Tree = hashtree:new({Index, TreeId}, [{segment_path, Path}]),
-            {ok, Itr} = eleveldb:iterator(DBRef, []),
             WaitFactor = wait_factor(DutyCycle),
-            ScanBatch = scan_batch(),
-            Tree2 = tmp_tree_insert(tmp_tree_iter_move(Itr, <<>>),
-                                    {Itr, 0, ScanBatch, WaitFactor, now()}, Tree),
-            eleveldb:iterator_close(Itr),
-            lager:info("Done building temporary tree for 2i data"),
+            BatchSize = scan_batch(),
+            FoldFun =
+            fun({K, V}, {Count, TreeAcc, StartTime}) ->
+                    Indexes = binary_to_term(V),
+                    Hash = riak_kv_index_hashtree:hash_index_data(Indexes),
+                    Tree2 = hashtree:insert(K, Hash, TreeAcc),
+                    Count2 = Count + 1,
+                    StartTime2 =
+                    case Count2 rem BatchSize of
+                        0 -> duty_cycle_pause(WaitFactor, StartTime),
+                             now();
+                        _ -> StartTime
+                    end,
+                    {Count2, Tree2, StartTime2}
+            end,
+            {Count, Tree2, _} = eleveldb:fold(DBRef, FoldFun,
+                                              {0, Tree, erlang:now()}, []),
+            lager:info("Done building temporary tree for 2i data "
+                       "with ~p entries",
+                       [Count]),
             {ok, Tree2};
         _ ->
             {error, io_lib:format("Could not create directory ~s", [Path])}
     end.
-
-%% @doc Wraps the leveldb iterator move operation.
-tmp_tree_iter_move(Itr, Seek) ->
-    try
-        eleveldb:iterator_move(Itr, Seek)
-    catch
-        _:badarg ->
-            {error, invalid_iterator}
-    end.
-
-%% @doc Iteration worker that inserts index data entries from the temporary
-%% database into the temporary 2i hashtree.
-tmp_tree_insert({error, invalid_iterator}, _ItrCtx, Tree) ->
-    Tree;
-tmp_tree_insert({ok, K, V},
-                {Itr, Count, BatchSize, WaitFactor, StartTime},
-                Tree) ->
-    Indexes = binary_to_term(V),
-    Hash = riak_kv_index_hashtree:hash_index_data(Indexes),
-    Tree2 = hashtree:insert(K, Hash, Tree),
-    Count2 = Count + 1,
-    StartTime2 =
-    case Count2 rem BatchSize of
-        0 -> duty_cycle_pause(WaitFactor, StartTime),
-             now();
-        _ -> StartTime
-    end,
-    tmp_tree_insert(tmp_tree_iter_move(Itr, next),
-                    {Itr, Count2, BatchSize, WaitFactor, StartTime2}, Tree2).
 
 %% @doc Remove all traces of the temporary hashtree for 2i index data.
 remove_tmp_tree(Partition, Tree) ->

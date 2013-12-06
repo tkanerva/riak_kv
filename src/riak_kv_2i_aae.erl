@@ -42,7 +42,7 @@ start_partition_repair(Partitions, DutyCycle)
   when is_number(DutyCycle),
        DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
     Parent = self(),
-    Ref = make_ref,
+    Ref = make_ref(),
     From = case length(Partitions) of
                1 ->
                    {Ref, Parent};
@@ -198,9 +198,7 @@ create_index_data_db(Partition, DutyCycle) ->
     LockFile = filename:join(DBDir, "LOCK"),
     case filelib:is_file(LockFile) of
         true ->
-            lager:info("Lock file found, deleting"),
-            file:delete(LockFile),
-            lager:info("Lock file supposedly deleted");
+            file:delete(LockFile);
         false ->
             ok
     end,

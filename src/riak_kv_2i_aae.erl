@@ -20,164 +20,175 @@
 
 %% @doc Code related to repairing 2i data.
 -module(riak_kv_2i_aae).
+-behaviour(gen_fsm).
 
 -include("riak_kv_wm_raw.hrl").
 
--export([repair_partition/2, start_partition_repair/2]).
+-export([start/2]).
+
+-export([next_partition/2, wait_for_aae_pid/2, wait_for_repair/3]).
+
+%% gen_fsm callbacks
+-export([init/1,
+         handle_event/3,
+         handle_sync_event/4,
+         handle_info/3,
+         terminate/3,
+         code_change/4]).
 
 %% How many items to scan before possibly pausing to obey speed throttle
 -define(DEFAULT_SCAN_BATCH, 1000).
 -define(MAX_DUTY_CYCLE, 100).
 -define(MIN_DUTY_CYCLE, 1).
 -define(LOCK_RETRIES, 10).
--define(HASHTREE_PID_REQ_TIMEOUT, 30000).
+-define(AAE_PID_TIMEOUT, 30000).
+
+-record(state,
+        {
+         speed,
+         partitions,
+         remaining,
+         results = [],
+         caller,
+         reply_to,
+         early_reply,
+         aae_pid_req_id,
+         worker_monitor
+        }).
 
 %% @doc Starts a process that will issue a repair for each partition in the
 %% list, sequentially.
-%% The DutyCycle parameter controls how fast we go. 100 means full speed,
+%% The Speed parameter controls how fast we go. 100 means full speed,
 %% 50 means to do a unit of work and pause for the duration of that unit
 %% to achieve a 50% duty cycle, etc.
--spec start_partition_repair([integer()], integer()) -> pid().
-start_partition_repair(Partitions, DutyCycle)
-  when is_number(DutyCycle),
-       DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
-    Parent = self(),
-    Ref = make_ref(),
-    From = case length(Partitions) of
-               1 ->
-                   {Ref, Parent};
-               _ ->
-                   undefined
-           end,
-    Pid =
-    spawn(
-      fun() ->
-              process_flag(trap_exit, true),
-              try
-                  register(riak_kv_2i_aae_repair, self()),
-                  Parent ! {Ref, riak_kv_2i_aae_registered}
-              catch
-                  error:badarg ->
-                      Parent ! {Ref, riak_kv_2i_aae_already_running},
-                      throw(repair_already_started)
-              end,
-              try
-                  lager:info("Starting 2i repair at speed ~p for partitions ~p",
-                             [DutyCycle, Partitions]),
-                  Errors =
-                  lists:foldl(
-                    fun(Partition, Errors) ->
-                            case (catch repair_partition(Partition,
-                                                         DutyCycle,
-                                                         From)) of
-                                ok ->
-                                    Errors;
-                                {error, Err} ->
-                                    Errors ++ [{Partition, Err}];
-                                Err ->
-                                    Errors ++ [{Partition, Err}]
-                            end
-                    end, [], Partitions),
-                  ErrMsg =
-                  case Errors of
-                      [] -> "";
-                      _ -> io_lib:format(" with errors ~p", [Errors])
-                  end,
-                  lager:info("Finished 2i repair for partitions ~p~s",
-                             [Partitions, ErrMsg])
-              catch
-                  _:_ ->
-                      lager:error("Could not complete 2i repair for partitions ~p",
-                                  [Partitions])
-              end
-      end),
-    Mon = monitor(process, Pid),
-    receive
-        {Ref, riak_kv_2i_aae_registered} ->
-            case length(Partitions) of
-                1 ->
-                    %% Wait for lock to be acquired to notify user immediately
-                    receive
-                        {Ref, ok} ->
-                            {ok, Pid};
-                        {Ref, {error, ImmErr}} ->
-                            {error, ImmErr};
-                        {'DOWN', Mon, _, _, Reason} ->
-                            {error, Reason}
-                    end;
+%% If a single partition is requested, this function will block until that
+%% partition has been blocked or that fails to notify the user immediately.
+start(Partitions, Speed)
+  when Speed >= ?MIN_DUTY_CYCLE, Speed =< ?MAX_DUTY_CYCLE ->
+    Res = gen_fsm:start({local, ?MODULE}, ?MODULE,
+                        [Partitions, Speed, self()], []),
+    case {Res, length(Partitions)} of
+        {{ok, _Pid}, 1} ->
+            EarlyAck = gen_fsm:sync_send_all_state_event(?MODULE, early_ack,
+                                                         infinity),
+            case EarlyAck of
+                lock_acquired ->
+                    Res;
                 _ ->
-                    {ok, Pid}
+                    EarlyAck
             end;
-        {Ref, riak_kv_2i_aae_already_running} ->
-            {error, already_running};
-        {'DOWN', Mon, _, _, Reason} ->
-            {error, Reason}
+        _ ->
+            Res
     end.
 
-repair_partition(Partition, DutyCycle) ->
-    repair_partition(Partition, DutyCycle, undefined).
+init([Partitions, Speed, Caller]) ->
+    lager:info("Starting 2i repair at speed ~p for partitions ~p",
+               [Speed, Partitions]),
+    {ok, next_partition, #state{partitions=Partitions, remaining=Partitions,
+                                speed=Speed, caller=Caller}, 0}.
 
-repair_partition(Partition, DutyCycle, From)
-  when is_number(DutyCycle),
-       DutyCycle >= ?MIN_DUTY_CYCLE, DutyCycle =< ?MAX_DUTY_CYCLE ->
-    case request_hashtree_pid(Partition) of
-        {ok, TreePid} ->
-            WorkerFun =
-            fun() ->
-                    repair_partition(Partition, DutyCycle, From, TreePid)
-            end,
-            run_worker("2i repair", WorkerFun);
-        {error, Err} ->
-            notify_caller(From, {error, {can_not_find_tree_for_partition}}),
-            {error, Err}
-    end.
+%% @doc Notifies caller for certain cases involving a single partition
+%% so the user sees an error condition from the command line.
+maybe_notify(State=#state{reply_to=undefined}, Reply) ->
+    State#state{early_reply=Reply};
+maybe_notify(State=#state{reply_to=From}, Reply) ->
+    gen_fsm:reply(From, Reply),
+    State#state{reply_to=undefined}.
 
 
-request_hashtree_pid(Partition) ->
-    riak_kv_vnode:request_hashtree_pid(Partition),
-    receive
-        {{hashtree_pid, Partition}, Reply} ->
-            Reply
-    after
-        ?HASHTREE_PID_REQ_TIMEOUT ->
-            {error, hashtree_pid_timeout}
-    end.
+%% @doc Process next partition or finish if no more remaining.
+next_partition(timeout, State=#state{partitions=Partitions, remaining=[],
+                                     results=Results}) ->
+    %% We are done. Report results
+    Errors = [Err || Err={_,{error,_}} <- Results],
+    ErrMsg = case Errors of
+                 [] -> "";
+                 _ -> io_lib:format(" with errors ~p", [Errors])
+             end,
+    lager:info("Finished 2i repair for partitions ~p~s", [Partitions, ErrMsg]),
+    {stop, normal, State};
+next_partition(timeout, State=#state{remaining=[Partition|_]}) ->
+    ReqId = make_ref(),
+    riak_core_vnode_master:command({Partition, node()},
+                                   {hashtree_pid, node()},
+                                   {fsm, ReqId, self()},
+                                   riak_kv_vnode_master),
+    {next_state, wait_for_aae_pid, State#state{aae_pid_req_id=ReqId}, ?AAE_PID_TIMEOUT}.
 
-notify_caller(From, Msg) ->
-    case From of
-        undefined ->
-            ok;
-        {Ref, Parent} ->
-            Parent ! {Ref, Msg}
-    end.
+%% @doc Waiting for vnode to send back the Pid of the AAE tree process.
+wait_for_aae_pid(timeout, State) ->
+    State2 = maybe_notify(State, {error, no_aae_pid}),
+    {stop, no_aae_pid, State2};
+wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId}) ->
+    State2 = maybe_notify(State, {error, {no_aae_pid, Err}}),
+    {stop, no_aae_pid, State2};
+wait_for_aae_pid({ReqId, {ok, TreePid}},
+                 State=#state{aae_pid_req_id=ReqId, speed=Speed,
+                              remaining=[Partition|_]}) ->
+    WorkerFun =
+    fun() ->
+            Res =
+            repair_partition(Partition, Speed, ?MODULE, TreePid),
+            gen_fsm:sync_send_event(?MODULE, {repair_result, Res})
+    end,
+    Mon = monitor(process, spawn(WorkerFun)),
+    {next_state, wait_for_repair, State#state{worker_monitor=Mon}}.
 
+%% @doc Waiting for a partition repair process to finish
+wait_for_repair({lock_acquired, Partition},
+                _From, 
+                State=#state{remaining=[Partition|_]}) ->
+    State2 = maybe_notify(State, lock_acquired),
+    {reply, ok, wait_for_repair, State2};
+wait_for_repair({repair_result, Res},
+                _From,
+                State=#state{remaining=[Partition|Rem],
+                             results=Results,
+                             worker_monitor=Mon}) ->
+    State2 =
+    case Res of
+        {error, {lock_failed, LockErr}} ->
+            maybe_notify(State, {lock_failed, LockErr});
+        _ ->
+            State
+    end,
+    demonitor(Mon, [flush]),
+    {reply, ok, next_partition,
+     State2#state{remaining=Rem,
+                  results=[{Partition, Res}|Results],
+                  worker_monitor=undefined},
+     0}.
+
+%% @doc Performs the actual repair work, called from a spawned process.
 repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of 
         ok ->
-            lager:info("Hashtree lock acquired"),
-            notify_caller(From, ok),
-            lager:info("Repairing 2i indexes in partition ~p", [Partition]),
+            lager:info("Acquired lock on partition ~p", [Partition]),
+            gen_fsm:sync_send_event(From, {lock_acquired, Partition}),
+            lager:info("Repairing indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
                 {ok, {DBDir, DBRef}} ->
                     Res =
                     case build_tmp_tree(Partition, DBRef, DutyCycle) of
                         {ok, TmpTree} ->
-                            Res0 = do_exchange(Partition, DBRef, TmpTree, TreePid),
+                            Res0 = do_exchange(Partition, DBRef, TmpTree,
+                                               TreePid),
                             remove_tmp_tree(Partition, TmpTree),
                             Res0;
                         BuildTreeErr ->
                             BuildTreeErr
                     end,
                     destroy_index_data_db(DBDir, DBRef),
-                    lager:info("Finished repairing indexes in partition ~p", [Partition]),
+                    lager:info("Finished repairing indexes in partition ~p",
+                               [Partition]),
                     Res;
                 CreateDBErr ->
                     CreateDBErr
             end;
         LockErr ->
-            lager:error("Failed to acquire hashtree lock"),
-            notify_caller(From, {error, {lock_failed, LockErr}}),
-            LockErr
+            lager:error("Failed to acquire hashtree lock on partition ~p",
+                        [Partition]),
+            {error, {lock_failed, LockErr}}
     end.
 
 %% No wait for speed 100, wait equal to work time when speed is 50,
@@ -195,13 +206,6 @@ scan_batch() ->
 %% @doc Create temporary DB holding 2i index data from disk.
 create_index_data_db(Partition, DutyCycle) ->
     DBDir = filename:join(data_root(), "tmp_db"),
-    LockFile = filename:join(DBDir, "LOCK"),
-    case filelib:is_file(LockFile) of
-        true ->
-            file:delete(LockFile);
-        false ->
-            ok
-    end,
     (catch eleveldb:destroy(DBDir, [])),
     case filelib:ensure_dir(DBDir) of
         ok ->
@@ -414,21 +418,34 @@ get_hashtree_lock(TreePid, Retries) ->
             Reply
     end.
 
-%% @doc Runs a given worker function in a new process and forwards its
-%% return value.
-run_worker(Name, WorkerFun) ->
-    Self = self(),
-    Ref = make_ref(),
-    WorkerPid = spawn_link( fun() ->
-                                    Res = WorkerFun(),
-                                    Self ! {Ref, Res}
-                            end),
-    Mon = monitor(process, WorkerPid),
-    receive
-        {'DOWN', Mon, process, WorkerPid, Reason} ->
-            lager:error("~s worker failed : ~p", [Name, Reason]),
-            {error, {worker_crashed, Reason}};
-        {Ref, WRes} ->
-            demonitor(Mon, [flush]),
-            WRes
-    end.
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%%%===================================================================
+%%% gen_fsm callbacks
+%%%===================================================================
+
+%% @doc Handles repair worker death notification
+handle_info({'DOWN', Mon, _, _, Reason}, wait_for_repair,
+            State=#state{worker_monitor=Mon, remaining=[Partition|_]}) ->
+    lager:error("Index repair of partition ~p failed : ~p",
+                [Partition, Reason]),
+    {stop, {partition_failed, Reason}, State}.
+
+handle_event(_Event, StateName, State) ->
+    {next_state, StateName, State}.
+
+handle_sync_event(early_ack, From, StateName,
+                  State=#state{early_reply=undefined}) ->
+    {next_state, StateName, State#state{reply_to=From}};
+handle_sync_event(early_ack, _From, StateName,
+                  State=#state{early_reply=Reply}) ->
+    {reply, Reply, StateName, State}.
+
+terminate(_Reason, _StateName, _State) ->
+    ok.
+
+code_change(_OldVsn, StateName, State, _Extra) ->
+    {ok, StateName, State}.

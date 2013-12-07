@@ -203,7 +203,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       ttl=TTL,
                                                       used_memory=UsedMemory}) ->
     Now = os:timestamp(),
-    NoValChange = TTL =:= undefined orelse Val =:= undefined, 
+    NoValChange = (TTL =:= undefined) orelse (Val =:= undefined),
     Val1 =
     case NoValChange of
         true ->
@@ -212,7 +212,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
             {{ts, Now}, Val}
     end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
-    NoMemChange = MaxMemory =:= undefined orelse Val =:= undefined,
+    NoMemChange = (MaxMemory =:= undefined) orelse (Val =:= undefined),
     UsedMemory1 =
     case NoMemChange of
         true ->
@@ -549,10 +549,10 @@ key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
 %% Iterates over a range of index postings
 index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
                    {QueryB, QueryI, Min, Max, StartKey, Incl}=Query) 
-  when (QueryB =:= undefined orelse QueryB =:= B),
-       (QueryI =:= undefined orelse QueryI =:= I),
-       (Min =:= undefined orelse V >= Min),
-       (Max =:= undefined orelse V =< Max) ->
+  when ((QueryB =:= undefined) orelse (QueryB =:= B)),
+       ((QueryI =:= undefined) orelse (QueryI =:= I)),
+       ((Min =:= undefined) orelse (V >= Min)),
+       ((Max =:= undefined) orelse (V =< Max)) ->
     case {Incl, ets:lookup(IndexRef, IndexKey)} of
         {_, []} ->
             %% This will happen on the first iteration, where the key

@@ -438,7 +438,7 @@ run_reformat(M, F, A) ->
     end.
 
 repair_2i(["status"]) ->
-    case whereis(riak_kv_2i_aae_repair) of
+    case whereis(riak_kv_2i_aae) of
         Pid when is_pid(Pid) ->
             io:format("2i repair is running\n"
                      "Check the logs for progress\n"
@@ -451,10 +451,10 @@ repair_2i(["status"]) ->
             ok
     end;
 repair_2i(["kill"]) ->
-    case whereis(riak_kv_2i_aae_repair) of
+    case whereis(riak_kv_2i_aae) of
         Pid when is_pid(Pid) ->
             io:format("Will kill current 2i repair process\n", []),
-            Mon = monitor(process, riak_kv_2i_aae_repair),
+            Mon = monitor(process, riak_kv_2i_aae),
             exit(Pid, kill),
             receive
                 {'DOWN', Mon, _, _, _} ->
@@ -473,13 +473,17 @@ repair_2i(Args) ->
         {ok, IdxList, DutyCycle} ->
             io:format("Will repair 2i on these partitions:\n", []),
             [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
-            Ret = riak_kv_2i_aae:start_partition_repair(IdxList, DutyCycle),
+            Ret = riak_kv_2i_aae:start(IdxList, DutyCycle),
             case Ret of
                 {ok, _Pid} ->
                     io:format("Watch the logs for 2i repair progress reports\n", []),
                     ok;
                 {error, {lock_failed, not_built}} ->
                     io:format("Error: The AAE tree for that partition has not been built yet\n", []),
+                    error;
+                {error, {lock_failed, LockErr}} ->
+                    io:format("Error: Could not get a lock on AAE tree for"
+                              " partition ~p : ~p\n", [hd(IdxList), LockErr]),
                     error;
                 {error, already_running} ->
                     io:format("Error: 2i repair is already running. Check the logs for progress\n", []),
@@ -534,7 +538,7 @@ parse_repair_2i_args(DutyCycle, Partitions) ->
     end.
 
 get_2i_repair_indexes([]) ->
-    AllVNodes = riak_core_vnode_manager:all_vnodes(),
+    AllVNodes = riak_core_vnode_manager:all_vnodes(riak_kv_vnode),
     {ok, [Idx || {riak_kv_vnode, Idx, _} <- AllVNodes]};
 get_2i_repair_indexes(IntStrs) ->
     {ok, NodeIdxList} = get_2i_repair_indexes([]),

@@ -548,7 +548,6 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                 {error, Reason, ModState2} ->
                     {{error, Reason}, ModState2}
             end,
-            % TODO: Add index refresh stats
             riak_core_vnode:reply(Sender, Reply),
             {noreply, State#state{modstate=UpModState}};
         false ->

@@ -451,7 +451,14 @@ repair_2i(["status"]) ->
 repair_2i(["kill"]) ->
     case whereis(riak_kv_2i_aae) of
         Pid when is_pid(Pid) ->
-            io:format("Will kill current 2i repair process\n", []),
+            try
+                riak_kv_2i_aae:stop(60000)
+            catch
+                _:_->
+                    lager:warning("Asking nicely did not work."
+                                  " Will try a hammer"),
+                    ok
+            end,
             Mon = monitor(process, riak_kv_2i_aae),
             exit(Pid, kill),
             receive
@@ -466,14 +473,19 @@ repair_2i(["kill"]) ->
                     ok
             end;
         undefined ->
-            io:format("2i repair is not currently running\n"),
+            io:format("2i repair is not running\n"),
             ok
     end;
 repair_2i(Args) ->
     case validate_repair_2i_args(Args) of
         {ok, IdxList, DutyCycle} ->
-            io:format("Will repair 2i on these partitions:\n", []),
-            [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
+            case length(IdxList) < 5 of
+                true ->
+                    io:format("Will repair 2i on these partitions:\n", []),
+                    [io:format("\t~p\n", [Idx]) || Idx <- IdxList];
+                false ->
+                    io:format("Will repair 2i data on ~p partitions\n", [length(IdxList)])
+            end,
             Ret = riak_kv_2i_aae:start(IdxList, DutyCycle),
             case Ret of
                 {ok, _Pid} ->
@@ -488,6 +500,9 @@ repair_2i(Args) ->
                     error;
                 {error, already_running} ->
                     io:format("Error: 2i repair is already running. Check the logs for progress\n", []),
+                    error;
+                {error, early_exit} ->
+                    io:format("Error: 2i repair finished immediately. Check the logs for details\n", []),
                     error;
                 {error, Reason} ->
                     io:format("Error running 2i repair : ~p\n", [Reason]),

@@ -24,7 +24,7 @@
 
 -include("riak_kv_wm_raw.hrl").
 
--export([start/2, get_status/0, to_report/1]).
+-export([start/2, stop/1, get_status/0, to_report/1]).
 
 -export([next_partition/2, wait_for_aae_pid/2, wait_for_repair/3,
          wait_for_repair/2]).
@@ -78,7 +78,8 @@
          worker_status :: worker_status(),
          index_scan_count = 0 :: integer(),
          hashtree_population_count = 0 :: integer(),
-         exchange_count = 0 :: integer()
+         exchange_count = 0 :: integer(),
+         open_dbs = [] :: [reference()]
         }).
 
 -record(partition_result, {
@@ -104,17 +105,28 @@ start(Partitions, Speed)
                         [Partitions, Speed, self()], []),
     case {Res, length(Partitions)} of
         {{ok, _Pid}, 1} ->
-            EarlyAck = gen_fsm:sync_send_all_state_event(?MODULE, early_ack,
-                                                         infinity),
-            case EarlyAck of
-                lock_acquired ->
-                    Res;
-                _ ->
-                    EarlyAck
+            try
+                EarlyAck = gen_fsm:sync_send_all_state_event(?MODULE,
+                                                             early_ack,
+                                                             infinity),
+                case EarlyAck of
+                    lock_acquired ->
+                        Res;
+                    _ ->
+                        EarlyAck
+                end
+            catch
+                exit:_ ->
+                    {error, early_exit}
             end;
+
         _ ->
             Res
     end.
+
+%% @doc Will stop any worker process and try to close leveldb databases.
+stop(TimeOut) ->
+    gen_fsm:sync_send_all_state_event(?MODULE, stop, TimeOut).
 
 -spec get_status() -> [{Key :: atom(), Val :: term()}].
 get_status() ->
@@ -210,7 +222,13 @@ wait_for_repair({hashtree_population_update, Count}, State) ->
 wait_for_repair({repair_count_update, Count}, State) ->
     {next_state, wait_for_repair,
      State#state{worker_status=exchanging,
-                 exchange_count=Count}}.
+                 exchange_count=Count}};
+wait_for_repair({open_db, DBRef}, State = #state{open_dbs=DBs}) ->
+    {next_state, wait_for_repair,
+     State#state{open_dbs=[DBRef|DBs]}};
+wait_for_repair({close_db, DBRef}, State = #state{open_dbs=DBs}) ->
+    {next_state, wait_for_repair,
+     State#state{open_dbs=lists:delete(DBRef, DBs)}}.
 
 %% @doc Performs the actual repair work, called from a spawned process.
 -spec repair_partition(integer(), integer(), {pid(), any()}, pid()) ->
@@ -632,7 +650,16 @@ handle_sync_event(early_ack, _From, StateName,
                   State=#state{early_reply=Reply}) ->
     {reply, Reply, StateName, State};
 handle_sync_event(status, _From, StateName, State) ->
-    {reply, to_simple_state(State), StateName, State}.
+    {reply, to_simple_state(State), StateName, State};
+handle_sync_event(stop, From, _StateName, State=#state{open_dbs=DBs}) ->
+    [try
+         eleveldb:close(DB)
+     catch
+         _:_ ->
+             ok
+     end || DB <- DBs],
+    gen_fsm:reply(From, ok),
+    {stop, user_request, State}.
 
 terminate(_Reason, _StateName, _State) ->
     ok.

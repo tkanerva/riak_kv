@@ -24,17 +24,21 @@
 
 -include("riak_kv_wm_raw.hrl").
 
--export([start/2]).
+-export([start/2, get_status/0, to_report/1]).
 
--export([next_partition/2, wait_for_aae_pid/2, wait_for_repair/3]).
+-export([next_partition/2, wait_for_aae_pid/2, wait_for_repair/3,
+         wait_for_repair/2]).
 
 %% gen_fsm callbacks
 -export([init/1,
          handle_event/3,
          handle_sync_event/4,
          handle_info/3,
+         format_status/2,
          terminate/3,
          code_change/4]).
+
+-export_type([status/0, partition_result/0, worker_status/0]).
 
 %% How many items to scan before possibly pausing to obey speed throttle
 -define(DEFAULT_SCAN_BATCH, 1000).
@@ -42,19 +46,49 @@
 -define(MIN_DUTY_CYCLE, 1).
 -define(LOCK_RETRIES, 10).
 -define(AAE_PID_TIMEOUT, 30000).
+-define(INDEX_SCAN_TIMEOUT, 300000). % 5 mins, in case fold dies timeout
+
+-type worker_status() :: starting | scanning_indexes | populating_hashtree |
+                         exchanging.
+
+-type partition_result() :: {Partition :: integer(),
+                             {ok,  term()} | {error, term()}}.
+
+-type status() :: [{speed, integer()} |
+                   {partitions, [integer()]} |
+                   {remaining, [integer()]} |
+                   {results, [partition_result()]}|
+                   {current_partition, integer()} |
+                   {current_partition_status, worker_status()} |
+                   {index_scan_count, integer()} |
+                   {hashtree_population_count, integer()} |
+                   {exchange_count, integer()}].
 
 -record(state,
         {
-         speed,
-         partitions,
-         remaining,
+         speed :: integer(),
+         partitions :: [integer()],
+         remaining :: [integer()],
          results = [],
-         caller,
+         caller :: pid(),
          reply_to,
          early_reply,
-         aae_pid_req_id,
-         worker_monitor
+         aae_pid_req_id :: pid() | undefined,
+         worker_monitor :: reference() | undefined,
+         worker_status :: worker_status(),
+         index_scan_count = 0 :: integer(),
+         hashtree_population_count = 0 :: integer(),
+         exchange_count = 0 :: integer()
         }).
+
+-record(partition_result, {
+          status :: ok | error,
+          error,
+          index_scan_count = 0 :: integer(),
+          hashtree_population_count = 0:: integer(),
+          exchange_count = 0 :: integer()
+         }).
+
 
 %% @doc Starts a process that will issue a repair for each partition in the
 %% list, sequentially.
@@ -63,6 +97,7 @@
 %% to achieve a 50% duty cycle, etc.
 %% If a single partition is requested, this function will block until that
 %% partition has been blocked or that fails to notify the user immediately.
+-spec start([integer()], integer()) -> {ok, pid()} | {error, term()}.
 start(Partitions, Speed)
   when Speed >= ?MIN_DUTY_CYCLE, Speed =< ?MAX_DUTY_CYCLE ->
     Res = gen_fsm:start({local, ?MODULE}, ?MODULE,
@@ -81,6 +116,10 @@ start(Partitions, Speed)
             Res
     end.
 
+-spec get_status() -> [{Key :: atom(), Val :: term()}].
+get_status() ->
+    gen_fsm:sync_send_all_state_event(?MODULE, status, infinity).
+
 init([Partitions, Speed, Caller]) ->
     lager:info("Starting 2i repair at speed ~p for partitions ~p",
                [Speed, Partitions]),
@@ -97,15 +136,11 @@ maybe_notify(State=#state{reply_to=From}, Reply) ->
 
 
 %% @doc Process next partition or finish if no more remaining.
-next_partition(timeout, State=#state{partitions=Partitions, remaining=[],
-                                     results=Results}) ->
+next_partition(timeout, State=#state{remaining=[]}) ->
     %% We are done. Report results
-    Errors = [Err || Err={_,{error,_}} <- Results],
-    ErrMsg = case Errors of
-                 [] -> "";
-                 _ -> io_lib:format(" with errors ~p", [Errors])
-             end,
-    lager:info("Finished 2i repair for partitions ~p~s", [Partitions, ErrMsg]),
+    Status = to_simple_state(State),
+    Report = to_report(Status),
+    lager:info("Finished 2i repair:\n~s", [Report]),
     {stop, normal, State};
 next_partition(timeout, State=#state{remaining=[Partition|_]}) ->
     ReqId = make_ref(),
@@ -136,7 +171,7 @@ wait_for_aae_pid({ReqId, {ok, TreePid}},
 
 %% @doc Waiting for a partition repair process to finish
 wait_for_repair({lock_acquired, Partition},
-                _From, 
+                _From,
                 State=#state{remaining=[Partition|_]}) ->
     State2 = maybe_notify(State, lock_acquired),
     {reply, ok, wait_for_repair, State2};
@@ -156,39 +191,74 @@ wait_for_repair({repair_result, Res},
     {reply, ok, next_partition,
      State2#state{remaining=Rem,
                   results=[{Partition, Res}|Results],
-                  worker_monitor=undefined},
+                  worker_monitor=undefined,
+                  worker_status=starting,
+                  index_scan_count=0,
+                  hashtree_population_count=0,
+                  exchange_count=0},
      0}.
 
+%% @doc Process async worker status updates during a repair
+wait_for_repair({index_scan_update, Count}, State) ->
+    {next_state, wait_for_repair,
+     State#state{worker_status=scanning_indexes,
+                 index_scan_count=Count}};
+wait_for_repair({hashtree_population_update, Count}, State) ->
+    {next_state, wait_for_repair,
+     State#state{worker_status=populating_hashtree,
+                 hashtree_population_count=Count}};
+wait_for_repair({repair_count_update, Count}, State) ->
+    {next_state, wait_for_repair,
+     State#state{worker_status=exchanging,
+                 exchange_count=Count}}.
+
 %% @doc Performs the actual repair work, called from a spawned process.
+-spec repair_partition(integer(), integer(), {pid(), any()}, pid()) ->
+    #partition_result{}.
 repair_partition(Partition, DutyCycle, From, TreePid) ->
-    case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of 
+    case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
         ok ->
             lager:info("Acquired lock on partition ~p", [Partition]),
             gen_fsm:sync_send_event(From, {lock_acquired, Partition}),
             lager:info("Repairing indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
-                {ok, {DBDir, DBRef}} ->
+                {ok, {DBDir, DBRef, IndexDBCount}} ->
                     Res =
                     case build_tmp_tree(Partition, DBRef, DutyCycle) of
-                        {ok, TmpTree} ->
+                        {ok, {TmpTree, TmpTreeCount}} ->
                             Res0 = do_exchange(Partition, DBRef, TmpTree,
                                                TreePid),
                             remove_tmp_tree(Partition, TmpTree),
-                            Res0;
-                        BuildTreeErr ->
-                            BuildTreeErr
+                            case Res0 of
+                                {ok, CmpCount} ->
+                                    #partition_result{
+                                       status=ok,
+                                       index_scan_count=IndexDBCount,
+                                       hashtree_population_count=TmpTreeCount,
+                                       exchange_count=CmpCount};
+                                {error, TmpTreeErr} ->
+                                    #partition_result{
+                                       status=error,
+                                       error=TmpTreeErr,
+                                       index_scan_count=IndexDBCount,
+                                       hashtree_population_count=TmpTreeCount}
+                            end;
+                        {error, BuildTreeErr} ->
+                            #partition_result{status=error,
+                                              error=BuildTreeErr,
+                                              index_scan_count=IndexDBCount}
                     end,
                     destroy_index_data_db(DBDir, DBRef),
                     lager:info("Finished repairing indexes in partition ~p",
                                [Partition]),
                     Res;
-                CreateDBErr ->
-                    CreateDBErr
+                {error, CreateDBErr} ->
+                    #partition_result{status=error, error=CreateDBErr}
             end;
         LockErr ->
             lager:error("Failed to acquire hashtree lock on partition ~p",
                         [Partition]),
-            {error, {lock_failed, LockErr}}
+            #partition_result{status=error, error=LockErr}
     end.
 
 %% No wait for speed 100, wait equal to work time when speed is 50,
@@ -239,7 +309,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
             case Count2 rem ScanBatch of
                 0 when DutyCycle < ?MAX_DUTY_CYCLE ->
                     Mon = monitor(process, Client),
-                    Client ! {BatchRef, self()},
+                    Client ! {BatchRef, self(), Count2},
                     receive
                         {BatchRef, continue} ->
                             ok;
@@ -268,7 +338,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
         _ ->
             lager:info("Grabbed ~p index data entries from partition ~p",
                        [NumFound, Partition]),
-            {ok, {DBDir, DBRef}}
+            {ok, {DBDir, DBRef, NumFound}}
     end.
 
 leveldb_opts() ->
@@ -296,21 +366,33 @@ duty_cycle_pause(WaitFactor, StartTime) ->
             ok
     end.
 
+%% @doc Async notify this FSM of an update.
+-spec send_event(any()) -> ok.
+send_event(Event) ->
+    gen_fsm:send_event(?MODULE, Event).
+
+%% @doc Waiting for 2i data scanning updates and final result.
 wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor) ->
     receive
-        {BatchRef, Pid} ->
+        {BatchRef, Pid, Count} ->
             duty_cycle_pause(WaitFactor, StartTime),
             Pid ! {BatchRef, continue},
+            send_event({index_scan_update, Count}),
             wait_for_index_scan(Ref, BatchRef, now(), WaitFactor);
         {Ref, Result} ->
             Result
+    after
+        ?INDEX_SCAN_TIMEOUT ->
+            {error, index_scan_timeout}
     end.
 
+-spec fetch_index_data(BK :: binary(), reference()) -> term().
 fetch_index_data(BK, DBRef) ->
+    % Let it crash on leveldb error
     case eleveldb:get(DBRef, BK, []) of
         {ok, BinVal} ->
             binary_to_term(BinVal);
-        _ ->
+        not_found ->
             []
     end.
 
@@ -345,18 +427,22 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
                     Count2 = Count + 1,
                     StartTime2 =
                     case Count2 rem BatchSize of
-                        0 -> duty_cycle_pause(WaitFactor, StartTime),
-                             now();
-                        _ -> StartTime
+                        0 ->
+                            send_event({hashtree_population_update, Count2}),
+                            duty_cycle_pause(WaitFactor, StartTime),
+                            now();
+                        _ ->
+                            StartTime
                     end,
                     {Count2, Tree2, StartTime2}
             end,
+            send_event({hashtree_population_update, 0}),
             {Count, Tree2, _} = eleveldb:fold(DBRef, FoldFun,
                                               {0, Tree, erlang:now()}, []),
             lager:info("Done building temporary tree for 2i data "
                        "with ~p entries",
                        [Count]),
-            {ok, Tree2};
+            {ok, {Tree2, Count}};
         _ ->
             {error, io_lib:format("Could not create directory ~s", [Path])}
     end.
@@ -368,6 +454,8 @@ remove_tmp_tree(Partition, Tree) ->
     hashtree:destroy(Tree).
 
 %% @doc Run exchange between the temporary 2i tree and the vnode's 2i tree.
+-spec do_exchange(integer(), reference(), hashtree:hashtree(), pid()) ->
+    {ok, integer()} | {error, any()}.
 do_exchange(Partition, DBRef, TmpTree, TreePid) ->
     lager:info("Reconciling 2i data"),
     IndexN2i = riak_kv_index_hashtree:index_2i_n(),
@@ -394,15 +482,28 @@ do_exchange(Partition, DBRef, TmpTree, TreePid) ->
               fun({_DiffReason, BKeyBin}, Count) ->
                       BK = binary_to_term(BKeyBin),
                       IdxData = fetch_index_data(BKeyBin, DBRef),
+                      % Sync refresh it. Not in a rush here.
                       riak_kv_vnode:refresh_index_data(Partition, BK, IdxData),
-                      Count + 1
+                      Count2 = Count + 1,
+                      send_event({repair_count_update, Count2}),
+                      Count2
               end,
               Acc, KeyDiff)
     end,
-    NumDiff = hashtree:compare(TmpTree3, Remote, AccFun, 0),
-    lager:info("Found ~p differences", [NumDiff]),
-    ok.
-
+    try
+        NumDiff = hashtree:compare(TmpTree3, Remote, AccFun, 0),
+        lager:info("Found ~p differences", [NumDiff]),
+        {ok, NumDiff}
+    catch
+        CmpErrClass:CmpErr ->
+            lager:error("Hashtree exchange failed ~p, ~p", [CmpErrClass, CmpErr]),
+            case CmpErrClass of
+                error ->
+                    {error, CmpErr};
+                _ ->
+                    {error, {CmpErrClass, CmpErr}}
+            end
+    end.
 
 get_hashtree_lock(TreePid, Retries) ->
     case riak_kv_index_hashtree:get_lock(TreePid, local_fsm) of
@@ -420,12 +521,96 @@ get_hashtree_lock(TreePid, Retries) ->
 
 
 %%%===================================================================
-%%% API
-%%%===================================================================
-
-%%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
+
+to_simple_partition_result(#partition_result{
+                              status=Status,
+                              error=Err,
+                              index_scan_count=IdxCount,
+                              hashtree_population_count=TreePopCount,
+                              exchange_count=CmpCount}) ->
+    [{status, Status}] ++
+    [{error, Err} || Err /= undefined] ++
+    [{index_scan_count, IdxCount},
+     {hashtree_population_count, TreePopCount},
+     {exchange_count, CmpCount}].
+
+%% @doc Returns a proplist simplified version of the state.
+to_simple_state(State) ->
+    #state{
+         speed=Speed,
+         partitions=Partitions,
+         remaining=Rem,
+         worker_status=WStatus,
+         index_scan_count=IdxCount,
+         hashtree_population_count=PopCount,
+         results = Results0
+      } = State,
+    Results =
+    [{Partition, to_simple_partition_result(Res)}
+     || {Partition, Res} <- Results0],
+    {TotIdxCount, TotPopCount, TotXchgCount} =
+    lists:foldl(fun({_, #partition_result{
+                       index_scan_count=NI,
+                       hashtree_population_count=NP,
+                       exchange_count=NX}}, {I, P, X}) ->
+                        {I+NI, P+NP, X+NX}
+                end, {0,0,0}, Results0),
+    PartStatus =
+    case length(Rem) > 0 of
+        true ->
+            [{current_partition, hd(Rem)},
+             {current_partition_status, WStatus},
+             {current_index_scan_count, IdxCount},
+             {current_hashtree_population_count, PopCount}];
+        false ->
+            []
+    end,
+    [{speed, Speed},
+     {partitions, Partitions},
+     {remaining, Rem},
+     {index_scan_count, TotIdxCount},
+     {hashtree_population_count, TotPopCount},
+     {exchange_count, TotXchgCount},
+     {results, Results}]
+    ++ PartStatus.
+
+format_status(_Opt, [_PDict, State]) ->
+    [{detailed_status, to_simple_state(State)}].
+
+%% @doc Human readable status report.
+to_report(Status) ->
+    Speed = proplists:get_value(speed, Status),
+    IdxScanCount = proplists:get_value(index_scan_count, Status),
+    PopCount = proplists:get_value(hashtree_population_count, Status),
+    XchgCount = proplists:get_value(exchange_count, Status),
+    Partitions = proplists:get_value(partitions, Status),
+    Rem = proplists:get_value(remaining, Status),
+    NParts = length(Partitions),
+    NDone = NParts - length(Rem),
+    Report0 = io_lib:format("\tTotal partitions: ~p\n"
+                            "\tFinished partitions: ~p\n"
+                            "\tSpeed: ~p\n"
+                            "\tTotal 2i items scanned: ~p\n"
+                            "\tTotal tree objects: ~p\n"
+                            "\tTotal objects fixed: ~p\n",
+                            [NParts, NDone, Speed, IdxScanCount, PopCount,
+                             XchgCount]),
+    Results = proplists:get_value(results, Status),
+    Errors =
+    [{P, proplists:get_value(error, R)}
+     || {P, R} <- Results,
+        proplists:get_value(status, R) == error],
+    case Errors of
+        [] ->
+            Report0;
+        _ ->
+            lists:flatten(
+             [Report0, io_lib:format("With errors:\n", []) |
+              [io_lib:format("Partition: ~p\nError: ~p\n\n", [P, E])
+               || {P, E} <- Errors]])
+    end.
 
 %% @doc Handles repair worker death notification
 handle_info({'DOWN', Mon, _, _, Reason}, wait_for_repair,
@@ -437,12 +622,17 @@ handle_info({'DOWN', Mon, _, _, Reason}, wait_for_repair,
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.
 
+%% @doc Handles early reply and status requests.
+%% A client may request an early acknowledgement, so early
+%% errors can be returned immediately to the user.
 handle_sync_event(early_ack, From, StateName,
                   State=#state{early_reply=undefined}) ->
     {next_state, StateName, State#state{reply_to=From}};
 handle_sync_event(early_ack, _From, StateName,
                   State=#state{early_reply=Reply}) ->
-    {reply, Reply, StateName, State}.
+    {reply, Reply, StateName, State};
+handle_sync_event(status, _From, StateName, State) ->
+    {reply, to_simple_state(State), StateName, State}.
 
 terminate(_Reason, _StateName, _State) ->
     ok.

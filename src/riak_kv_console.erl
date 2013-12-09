@@ -438,16 +438,14 @@ run_reformat(M, F, A) ->
     end.
 
 repair_2i(["status"]) ->
-    case whereis(riak_kv_2i_aae) of
-        Pid when is_pid(Pid) ->
-            io:format("2i repair is running\n"
-                     "Check the logs for progress\n"
-                     "If the process has stalled, you can forcibly stop it by running:\n"
-                     "\triak-admin repair-2i kill\n",
-                     []),
-            ok;
-        undefined ->
-            io:format("2i repair is not currently running\n", []),
+    try
+        Status = riak_kv_2i_aae:get_status(),
+        Report = riak_kv_2i_aae:to_report(Status),
+        io:format("2i repair status is running:\n~s", [Report]),
+        ok
+    catch
+        exit:{noproc, _NoProcErr} ->
+            io:format("2i repair is not running\n", []),
             ok
     end;
 repair_2i(["kill"]) ->
@@ -458,10 +456,13 @@ repair_2i(["kill"]) ->
             exit(Pid, kill),
             receive
                 {'DOWN', Mon, _, _, _} ->
-                    lager:info("2i repair process has been killed by user request"),
+                    lager:info("2i repair process has been killed by user"
+                               " request"),
                     io:format("The 2i repair process has ceased to be.\n"
-                              "Since it was killed forcibly, you may have to wait some time\n"
-                              "for all internal locks to be released before trying again\n", []),
+                              "Since it was killed forcibly, you may have to "
+                              "wait some time\n"
+                              "for all internal locks to be released before "
+                              "trying again\n", []),
                     ok
             end;
         undefined ->

@@ -532,12 +532,12 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
     IndexCap = lists:member(indexes, Caps),
     case IndexCap of
         true ->
-            IdxData =
+            {Exists, RObj, IdxData} =
             case do_get_term(BKey, Mod, ModState) of
-                {ok, RObj} ->
-                    riak_object:index_data(RObj);
+                {ok, ExistingObj} ->
+                    {true, ExistingObj, riak_object:index_data(ExistingObj)};
                 _ ->
-                    []
+                    {false, undefined, []}
             end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
             {Reply, UpModState} = 
@@ -547,6 +547,12 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     {ok, ModState2};
                 {error, Reason, ModState2} ->
                     {{error, Reason}, ModState2}
+            end,
+            case Exists of
+                true ->
+                    update_hashtree(Bucket, Key, RObj, State);
+                false ->
+                    delete_from_hashtree(Bucket, Key, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
             {noreply, State#state{modstate=UpModState}};
@@ -1509,8 +1515,25 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
     update_hashtree(Bucket, Key, RObj, State);
-update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees}) ->
-    Items = [{object, {Bucket, Key}, RObj}],
+update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees,
+                                          mod=Mod,
+                                          modstate=ModState}) ->
+    {ok, ModCaps} = Mod:capabilities(Bucket, ModState),
+    IndexCap = lists:member(indexes, ModCaps ),
+    BKey = {Bucket, Key},
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinKey = term_to_binary(BKey),
+    ObjHash = riak_kv_index_hashtree:hash_object(BKey, RObj),
+    Item0 = {IndexN, BinKey, ObjHash},
+    Items = case IndexCap of
+                false ->
+                    [Item0];
+                true ->
+                    IndexN2i = riak_kv_index_hashtree:index_2i_n(),
+                    IndexData = riak_object:index_data(RObj),
+                    Hash2i =  riak_kv_index_hashtree:hash_index_data(IndexData),
+                    [Item0, {IndexN2i, BinKey, Hash2i}]
+            end,
     case get_hashtree_token() of
         true ->
             riak_kv_index_hashtree:async_insert(Items, [], Trees),
@@ -1521,8 +1544,22 @@ update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees}) ->
             ok
     end.
 
-delete_from_hashtree(Bucket, Key, #state{hashtrees=Trees})->
-    Items = [{object, {Bucket, Key}}],
+delete_from_hashtree(Bucket, Key, #state{hashtrees=Trees,
+                                         mod=Mod,
+                                         modstate=ModState})->
+    {ok, ModCaps} = Mod:capabilities(Bucket, ModState),
+    IndexCap = lists:member(indexes, ModCaps ),
+    BKey = {Bucket, Key},
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinKey = term_to_binary(BKey),
+    Item0 = {IndexN, BinKey},
+    Items = case IndexCap of
+                false ->
+                    [Item0];
+                true ->
+                    IndexN2i = riak_kv_index_hashtree:index_2i_n(),
+                    [Item0, {IndexN2i, BinKey}]
+            end,
     case get_hashtree_token() of
         true ->
             riak_kv_index_hashtree:async_delete(Items, Trees),

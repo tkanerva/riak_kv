@@ -47,6 +47,7 @@
 -define(LOCK_RETRIES, 10).
 -define(AAE_PID_TIMEOUT, 30000).
 -define(INDEX_SCAN_TIMEOUT, 300000). % 5 mins, in case fold dies timeout
+-define(INDEX_REFRESH_TIMEOUT, 60000).
 
 -type worker_status() :: starting | scanning_indexes | populating_hashtree |
                          exchanging.
@@ -501,7 +502,8 @@ do_exchange(Partition, DBRef, TmpTree, TreePid) ->
                       BK = binary_to_term(BKeyBin),
                       IdxData = fetch_index_data(BKeyBin, DBRef),
                       % Sync refresh it. Not in a rush here.
-                      riak_kv_vnode:refresh_index_data(Partition, BK, IdxData),
+                      riak_kv_vnode:refresh_index_data(Partition, BK, IdxData,
+                                                      ?INDEX_REFRESH_TIMEOUT),
                       Count2 = Count + 1,
                       send_event({repair_count_update, Count2}),
                       Count2

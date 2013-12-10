@@ -475,14 +475,13 @@ remove_tmp_tree(Partition, Tree) ->
 %% @doc Run exchange between the temporary 2i tree and the vnode's 2i tree.
 -spec do_exchange(integer(), reference(), hashtree:hashtree(), pid()) ->
     {ok, integer()} | {error, any()}.
-do_exchange(Partition, DBRef, TmpTree, TreePid) ->
+do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
     lager:info("Reconciling 2i data"),
     IndexN2i = riak_kv_index_hashtree:index_2i_n(),
     lager:debug("Updating the vnode tree"),
     ok = riak_kv_index_hashtree:update(IndexN2i, TreePid),
     lager:debug("Updating the temporary 2i AAE tree"),
-    {_, TmpTree2} = hashtree:update_snapshot(TmpTree),
-    TmpTree3 = hashtree:update_perform(TmpTree2),
+    TmpTree = hashtree:update_tree(TmpTree0),
     Remote =
     fun(get_bucket, {L, B}) ->
             R1 = riak_kv_index_hashtree:exchange_bucket(IndexN2i, L, B,
@@ -511,7 +510,7 @@ do_exchange(Partition, DBRef, TmpTree, TreePid) ->
               Acc, KeyDiff)
     end,
     try
-        NumDiff = hashtree:compare(TmpTree3, Remote, AccFun, 0),
+        NumDiff = hashtree:compare(TmpTree, Remote, AccFun, 0),
         lager:info("Found ~p differences", [NumDiff]),
         {ok, NumDiff}
     catch

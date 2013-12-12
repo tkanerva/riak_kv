@@ -560,14 +560,14 @@ expand_items(HasIndex, Items) ->
 expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
     BinBKey = term_to_binary(BKey),
-    ObjHash = riak_kv_index_hashtree:hash_object(BKey, RObj),
+    ObjHash = hash_object(BKey, RObj),
     Item0 = {IndexN, BinBKey, ObjHash},
     case Has2ITree of
         false ->
             [Item0 | Others];
         true ->
             IndexData = riak_object:index_data(RObj),
-            Hash2i =  riak_kv_index_hashtree:hash_index_data(IndexData),
+            Hash2i =  hash_index_data(IndexData),
             [Item0, {?INDEX_2I_N, BinBKey, Hash2i} | Others]
     end;
 expand_item(_, Item, Others) ->

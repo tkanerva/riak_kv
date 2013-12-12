@@ -101,12 +101,12 @@ start_link(Index, IndexNs=[_|_], VNPid) ->
 %%                         already exist in the hashtree.
 insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
-insert(Items=[{_Id, _Key, _Hash}|_], Opts, Tree) ->
+insert(Items=[_|_], Opts, Tree) ->
     catch gen_server:call(Tree, {insert, Items, Opts}, infinity).
 
 async_insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
-async_insert(Items=[{_Id, _Key, _Hash}|_], Opts, Tree) ->
+async_insert(Items=[_|_], Opts, Tree) ->
     gen_server:cast(Tree, {insert, Items, Opts}).
 
 -spec delete([{binary(), binary()}], pid()) -> ok.
@@ -548,10 +548,36 @@ valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
 valid_time(_) ->
     false.
 
--spec do_insert([{index_n(), binary(), binary()}], proplist(), state()) -> state().
-do_insert([], _Opts, State) ->
+do_insert(Items, Opts, State=#state{trees=Trees}) ->
+    HasIndex = has_index_tree(Trees),
+    do_insert_expanded(expand_items(HasIndex, Items), Opts, State).
+
+expand_items(HasIndex, Items) ->
+    lists:foldl(fun(I, Acc) ->
+                        expand_item(HasIndex, I, Acc)
+                end, [], Items).
+
+expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinBKey = term_to_binary(BKey),
+    ObjHash = riak_kv_index_hashtree:hash_object(BKey, RObj),
+    Item0 = {IndexN, BinBKey, ObjHash},
+    case Has2ITree of
+        false ->
+            [Item0 | Others];
+        true ->
+            IndexData = riak_object:index_data(RObj),
+            Hash2i =  riak_kv_index_hashtree:hash_index_data(IndexData),
+            [Item0, {?INDEX_2I_N, BinBKey, Hash2i} | Others]
+    end;
+expand_item(_, Item, Others) ->
+    [Item | Others].
+
+-spec do_insert_expanded([{index_n(), binary(), binary()}], proplist(),
+                         state()) -> state().
+do_insert_expanded([], _Opts, State) ->
     State;
-do_insert([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
+do_insert_expanded([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
     State2 = 
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
@@ -561,12 +587,32 @@ do_insert([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
         _ ->
             handle_unexpected_key(Id, Key, State)
     end,
-    do_insert(Rest, Opts, State2).
+    do_insert_expanded(Rest, Opts, State2).
 
--spec do_delete(list(), state()) -> state().
-do_delete([], State) ->
+do_delete(Items, State=#state{trees=Trees}) ->
+    HasIndex = has_index_tree(Trees),
+    do_delete_expanded(expand_delete_items(HasIndex, Items), State).
+
+expand_delete_items(HasIndex, Items) ->
+    lists:foldl(fun(I, Acc) ->
+                        expand_delete_item(HasIndex, I, Acc)
+                end, [], Items).
+
+expand_delete_item(Has2ITree, {object, BKey}, Others) ->
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinKey = term_to_binary(BKey),
+    Item0 = {IndexN, BinKey},
+    case Has2ITree of
+        false ->
+            [Item0 | Others];
+        true ->
+            [Item0, {?INDEX_2I_N, BinKey} | Others]
+    end.
+
+-spec do_delete_expanded(list(), state()) -> state().
+do_delete_expanded([], State) ->
     State;
-do_delete([{Id, Key}|Rest], State=#state{trees=Trees}) ->
+do_delete_expanded([{Id, Key}|Rest], State=#state{trees=Trees}) ->
     State2 =
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
@@ -576,7 +622,7 @@ do_delete([{Id, Key}|Rest], State=#state{trees=Trees}) ->
         _ ->
             handle_unexpected_key(Id, Key, State)
     end,
-    do_delete(Rest, State2).
+    do_delete_expanded(Rest, State2).
 
 -spec handle_unexpected_key(index_n(), binary(), state()) -> state().
 handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->

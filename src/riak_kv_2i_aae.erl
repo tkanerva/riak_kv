@@ -134,6 +134,7 @@ get_status() ->
     gen_fsm:sync_send_all_state_event(?MODULE, status, infinity).
 
 init([Partitions, Speed, Caller]) ->
+    process_flag(trap_exit, true),
     lager:info("Starting 2i repair at speed ~p for partitions ~p",
                [Speed, Partitions]),
     {ok, next_partition, #state{partitions=Partitions, remaining=Partitions,
@@ -157,10 +158,7 @@ next_partition(timeout, State=#state{remaining=[]}) ->
     {stop, normal, State};
 next_partition(timeout, State=#state{remaining=[Partition|_]}) ->
     ReqId = make_ref(),
-    riak_core_vnode_master:command({Partition, node()},
-                                   {hashtree_pid, node()},
-                                   {fsm, ReqId, self()},
-                                   riak_kv_vnode_master),
+    riak_kv_vnode:request_hashtree_pid(Partition, {fsm, ReqId, self()}),
     {next_state, wait_for_aae_pid, State#state{aae_pid_req_id=ReqId}, ?AAE_PID_TIMEOUT}.
 
 %% @doc Waiting for vnode to send back the Pid of the AAE tree process.
@@ -177,9 +175,9 @@ wait_for_aae_pid({ReqId, {ok, TreePid}},
     fun() ->
             Res =
             repair_partition(Partition, Speed, ?MODULE, TreePid),
-            gen_fsm:sync_send_event(?MODULE, {repair_result, Res})
+            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity)
     end,
-    Mon = monitor(process, spawn(WorkerFun)),
+    Mon = monitor(process, spawn_link(WorkerFun)),
     {next_state, wait_for_repair, State#state{worker_monitor=Mon}}.
 
 %% @doc Waiting for a partition repair process to finish
@@ -238,7 +236,7 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
         ok ->
             lager:info("Acquired lock on partition ~p", [Partition]),
-            gen_fsm:sync_send_event(From, {lock_acquired, Partition}),
+            gen_fsm:sync_send_event(From, {lock_acquired, Partition}, infinity),
             lager:info("Repairing indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
                 {ok, {DBDir, DBRef, IndexDBCount}} ->
@@ -632,11 +630,17 @@ to_report(Status) ->
     end.
 
 %% @doc Handles repair worker death notification
-handle_info({'DOWN', Mon, _, _, Reason}, wait_for_repair,
+handle_info({'EXIT', _From, _Reason}, StateName, State) ->
+    %% We handle the monitor down message instead.
+    {next_state, StateName, State};
+handle_info({'DOWN', Mon, _, _, Reason}, _StateName,
             State=#state{worker_monitor=Mon, remaining=[Partition|_]}) ->
     lager:error("Index repair of partition ~p failed : ~p",
                 [Partition, Reason]),
-    {stop, {partition_failed, Reason}, State}.
+    {stop, {partition_failed, Reason}, State};
+handle_info({'DOWN', _Mon, _, _, _Reason}, StateName, State) ->
+    % Proces died after we got its result, so ignore.
+    {next_state, StateName, State}.
 
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.

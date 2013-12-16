@@ -51,6 +51,7 @@
          async_insert_object/3,
          stop/1,
          clear/1,
+         expire/1,
          destroy/1]).
 
 -export([poke/1,
@@ -66,6 +67,7 @@
 -record(state, {index,
                 vnode_pid,
                 built,
+                expired :: boolean(),
                 lock :: undefined | reference(),
                 path,
                 build_time,
@@ -211,6 +213,10 @@ destroy(Tree) ->
 clear(Tree) ->
     gen_server:call(Tree, clear, infinity).
 
+%% @doc Expire the specified index_hashtree
+expire(Tree) ->
+    gen_server:call(Tree, expire, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -236,6 +242,7 @@ init([Index, IndexNs, VNPid, VNEmpty]) ->
                            vnode_pid=VNPid,
                            trees=orddict:new(),
                            built=false,
+                           expired=false,
                            path=Path},
             State2 = init_trees(IndexNs, State),
             %% If vnode is empty, mark tree as built without performing fold
@@ -305,6 +312,10 @@ handle_call(destroy, _From, State) ->
 
 handle_call(clear, _From, State) ->
     State2 = clear_tree(State),
+    {reply, ok, State2};
+
+handle_call(expire, _From, State) ->
+    State2 = State#state{expired=true},
     {reply, ok, State2};
 
 handle_call(_Request, _From, State) ->
@@ -390,7 +401,7 @@ init_trees(IndexNs, State) ->
     State2 = lists:foldl(fun(Id, StateAcc) ->
                                  do_new_tree(Id, StateAcc)
                          end, State, IndexNs),
-    State2#state{built=false}.
+    State2#state{built=false, expired=false}.
 
 -spec load_built(state()) -> boolean().
 load_built(#state{trees=Trees}) ->
@@ -519,7 +530,7 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     hashtree:write_meta(<<"built">>, <<1>>, Tree0),
     hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
-    State#state{built=true, build_time=BuildTime}.
+    State#state{built=true, build_time=BuildTime, expired=false}.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If
@@ -651,13 +662,12 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 
 -spec do_poke(state()) -> state().
 do_poke(State) ->
-    State1 = maybe_clear(State),
+    State1 = maybe_rebuild(maybe_expire(State)),
     State2 = maybe_build(State1),
     State2.
 
-%% If past expiration, clear all hashtrees.
--spec maybe_clear(state()) -> state().
-maybe_clear(State=#state{lock=undefined, built=true}) ->
+-spec maybe_expire(state()) -> state().
+maybe_expire(State=#state{lock=undefined, built=true}) ->
     Diff = timer:now_diff(os:timestamp(), State#state.build_time),
     Expire = app_helper:get_env(riak_kv,
                                 anti_entropy_expire,
@@ -665,11 +675,11 @@ maybe_clear(State=#state{lock=undefined, built=true}) ->
     %% Need to convert from millsec to microsec
     case (Expire =/= never) andalso (Diff > (Expire * 1000)) of
         true ->
-            clear_tree(State);
+            State#state{expired=true};
         false ->
             State
     end;
-maybe_clear(State) ->
+maybe_expire(State) ->
     State.
 
 -spec clear_tree(state()) -> state().
@@ -678,7 +688,7 @@ clear_tree(State=#state{index=Index}) ->
     State2 = destroy_trees(State),
     IndexNs = riak_kv_util:responsible_preflists(Index),
     State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
-    State3#state{built=false}.
+    State3#state{built=false, expired=false}.
 
 destroy_trees(State) ->
     State2 = close_trees(State),
@@ -701,12 +711,15 @@ maybe_build(State) ->
 %% a fold/build. Otherwise, trigger a rehash to ensure the hashtrees match the
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
-build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
+build_or_rehash(Self, State) ->
     Type = case load_built(State) of
                false -> build;
                true  -> rehash
            end,
     Lock = riak_kv_entropy_manager:get_lock(Type),
+    build_or_rehash(Self, Lock, Type, State).
+
+build_or_rehash(Self, Lock, Type, #state{index=Index, trees=Trees}) ->
     case {Lock, Type} of
         {ok, build} ->
             lager:debug("Starting build: ~p", [Index]),
@@ -721,6 +734,30 @@ build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
         {_Error, _} ->
             gen_server:cast(Self, build_failed)
     end.
+
+-spec maybe_rebuild(state()) -> state().
+maybe_rebuild(State=#state{lock=undefined, built=true, expired=true}) ->
+    Self = self(),
+    Pid = spawn_link(fun() ->
+                             receive
+                                 {lock, Lock, State2} ->
+                                     build_or_rehash(Self, Lock, build, State2);
+                                 stop ->
+                                     ok
+                             end
+                     end),
+    Lock = riak_kv_entropy_manager:get_lock(build, Pid),
+    case Lock of
+        ok ->
+            State2 = clear_tree(State),
+            Pid ! {lock, Lock, State2},
+            State2#state{built=Pid};
+        _ ->
+            Pid ! stop,
+            State
+    end;
+maybe_rebuild(State) ->
+    State.
 
 close_trees(State=#state{trees=Trees}) ->
     Trees2 = [begin

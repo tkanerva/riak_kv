@@ -199,15 +199,15 @@ poke(Tree) ->
 stop(Tree) ->
     gen_server:cast(Tree, stop).
 
+%% @doc Clear the specified index_hashtree, clearing all associated hashtrees
+clear(Tree) ->
+    gen_server:call(Tree, clear, infinity).
+
 %% @doc Destroy the specified index_hashtree, which will destroy all
 %%      associated hashtrees and terminate.
 -spec destroy(pid()) -> ok.
 destroy(Tree) ->
     gen_server:call(Tree, destroy, infinity).
-
-%% @doc Clear the specified index_hashtree, clearing all associated hashtrees
-clear(Tree) ->
-    gen_server:call(Tree, clear, infinity).
 
 %% @doc Expire the specified index_hashtree
 expire(Tree) ->

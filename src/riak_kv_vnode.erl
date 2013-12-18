@@ -1017,6 +1017,10 @@ handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
     {ok, State};
 
+handle_info({ensemble_ping, Pid}, State) ->
+    riak_ensemble_peer:backend_pong(Pid),
+    {ok, State};
+
 handle_info({ensemble_get, Key, From}, State=#state{idx=Idx, forward=Fwd}) ->
     case Fwd of
         undefined ->
@@ -1048,6 +1052,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                         {fail, _Idx, _ReqID} ->
                             failed
                     end,
+            %% [lager:info("~p: put ~p", [Idx, Key]) || Reply =/= failed],
             ((Reply =/= failed) and (HOTarget =/= undefined)) andalso raw_put(HOTarget, Key, Obj),
             riak_kv_ensemble_backend:reply(From, Reply),
             {ok, State2};

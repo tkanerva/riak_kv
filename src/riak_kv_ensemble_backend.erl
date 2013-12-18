@@ -30,7 +30,7 @@
 -export([init/3, new_obj/4]).
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
--export([get/3, put/4, tick/5]).
+-export([get/3, put/4, tick/5, ping/1]).
 -export([sync_request/2, sync/2]).
 -export([reply/2]).
 
@@ -52,6 +52,8 @@
 init(Ensemble, Id, []) ->
     {{kv, _PL, _N, Idx}, _} = Id,
     Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
+    %% {ok, Pid} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+    %% erlang:link(Pid),
     #state{ensemble=Ensemble,
            id=Id,
            proxy=Proxy}.
@@ -164,6 +166,7 @@ sync(_, State) ->
 
 -spec tick(epoch(), seq(), peer_id(), views(), state()) -> state().
 tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
+    %% TODO: Should this entire function be async?
     {{kv, Idx, N, _}, _} = Id,
     Latest = hd(Views),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
@@ -178,6 +181,8 @@ tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
             State;
         _ ->
             %% io:format("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
+            lager:info("Changes ## ~p", [Changes]),
+            lager:info("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
             State2 = maybe_async_update(Changes, State),
             State2
     end.
@@ -190,7 +195,25 @@ maybe_async_update(Changes, State=#state{async=Async}) ->
         false ->
             Self = self(),
             Async2 = spawn(fun() ->
-                                   riak_ensemble_peer:update_members(Self, Changes, 5000)
+                                   timer:sleep(5000),
+                                   case riak_ensemble_peer:update_members(Self, Changes, 5000) of
+                                       ok ->
+                                           ok;
+                                       Other ->
+                                           lager:info("Failed: ~p", [Other])
+                                   end
                            end),
             State#state{async=Async2}
     end.
+
+%%===================================================================
+
+ping(State=#state{id=_Id, proxy=Proxy}) ->
+    %% lager:info("Trying ping"),
+    %% {{kv, Idx, _, _}, _} = Id,
+    %% {ok, Pid} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+    %% riak_core_vnode:ping(Pid, 500),
+    %% lager:info("Ping: ~p :: ~p -> success", [Idx, Pid]),
+    Peer = self(),
+    catch Proxy ! {ensemble_ping, Peer},
+    {async, State}.

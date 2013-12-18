@@ -50,6 +50,7 @@
          insert_object/3,
          async_insert_object/3,
          stop/1,
+         clear/1,
          destroy/1]).
 
 -export([poke/1,
@@ -200,6 +201,10 @@ poke(Tree) ->
 stop(Tree) ->
     gen_server:cast(Tree, stop).
 
+%% @doc Clear the specified index_hashtree, clearing all associated hashtrees
+clear(Tree) ->
+    gen_server:call(Tree, clear, infinity).
+
 %% @doc Destroy the specified index_hashtree, which will destroy all
 %%      associated hashtrees and terminate.
 -spec destroy(pid()) -> ok.
@@ -292,6 +297,10 @@ handle_call({compare, Id, Remote, AccFun, Acc}, From, State) ->
 handle_call(destroy, _From, State) ->
     State2 = destroy_trees(State),
     {stop, normal, ok, State2};
+
+handle_call(clear, _From, State) ->
+    State2 = clear_tree(State),
+    {reply, ok, State2};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,

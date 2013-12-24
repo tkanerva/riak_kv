@@ -1101,7 +1101,6 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {ok, RObj} ->
                        case delete_hash(RObj) of
                            RObjHash ->
-                               maybe_cache_evict(BKey, State),
                                do_backend_delete(BKey, RObj, State);
                          _ ->
                                State
@@ -1190,6 +1189,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
         {ok, UpdModState} ->
             ?INDEX(RObj, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
+            maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
         {error, _Reason, UpdModState} ->

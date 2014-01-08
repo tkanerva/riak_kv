@@ -887,6 +887,7 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     Val = term_to_binary(Obj),
+    maybe_size_warning(Bucket, Key, Val, write),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, UpdModState} ->
             update_hashtree(Bucket, Key, Val, State),
@@ -957,6 +958,25 @@ put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
                        riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
     end.
 
+maybe_size_warning({Bucket, Key}, BinObj, Op) ->
+    maybe_size_warning(Bucket, Key, BinObj, Op).
+
+maybe_size_warning(Bucket, Key, BinObj, Op) ->
+
+    OpStr = case Op of
+                read -> "Read";
+                _ -> "Writing"
+            end,
+    WarnSize = app_helper:get_env(riak_kv, warn_object_size, 2000000),
+    BinSize = size(BinObj),
+    case BinSize > WarnSize of
+        true ->
+            lager:warning("~s large object ~p/~p (~p bytes)",
+                          [OpStr, Bucket, Key, BinSize]);
+        false ->
+            ok
+    end.
+            
 %% @private
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
@@ -969,6 +989,7 @@ do_get(_Sender, BKey, ReqID,
 do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
+            maybe_size_warning(BKey, Bin, read),
             {ok, binary_to_term(Bin)};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
@@ -1160,6 +1181,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     IndexSpecs = []
             end,
             Val = term_to_binary(DiffObj),
+            maybe_size_warning(Bucket, Key, Val, write),
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
@@ -1170,6 +1192,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             end,
             Res;
         {ok, Val0, _UpdModState} ->
+            maybe_size_warning(Bucket, Key, Val0, read),
             OldObj = binary_to_term(Val0),
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
@@ -1186,6 +1209,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                             IndexSpecs = []
                     end,
                     Val = term_to_binary(AMObj),
+                    maybe_size_warning(Bucket, Key, Val, write),
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
                         {ok, _UpdModState} ->

@@ -82,6 +82,11 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+% there's a dependancy introduced that requires the background manager.
+% Inorder to start the background manager, we need to start the
+% riak_core_table_manager. To start that properly, we need to get some
+% info to start it thats in a header file.
+-include_lib("riak_core/include/riak_core_bg_manager.hrl").
 -export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
@@ -1517,12 +1522,7 @@ do_get(_Sender, BKey, ReqID,
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, _UpdModState} ->
-            case riak_kv_mutator:mutate_get(Obj) of
-                notfound ->
-                    {error, notfound};
-                Obj2 ->
-                    {ok, Obj2}
-            end;
+            {ok, Obj};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1543,7 +1543,7 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
     end.
 
 do_get_object(Bucket, Key, Mod, ModState) ->
-    case uses_r_object(Mod, ModState, Bucket) of
+    BeforeUnmutate = case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
@@ -1574,7 +1574,19 @@ do_get_object(Bucket, Key, Mod, ModState) ->
                 Else ->
                     Else
             end
-    end.
+    end,
+    do_get_unmutate(BeforeUnmutate).
+
+do_get_unmutate({ok, Obj, UpdModState}) ->
+    case riak_kv_mutator:mutate_get(Obj) of
+        notfound ->
+            {error, not_found, UpdModState};
+        Obj2 ->
+            {ok, Obj2, UpdModState}
+    end;
+
+do_get_unmutate(Any) ->
+    Any.
 
 %% @private
 %% @doc This is a generic function for operations that involve
@@ -2405,9 +2417,16 @@ list_buckets_test_() ->
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
              riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
+             riak_core_table_manager:start_link([
+                {?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
+                {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}
+             ]),
+             riak_core_bg_manager:start_link(),
              Env
      end,
      fun(Env) ->
+             riak_kv_test_util:stop_process(riak_core_bg_manager),
+             riak_kv_test_util:stop_process(riak_core_table_manager),
              riak_core_ring_manager:cleanup_ets(test),
              riak_core_stat_cache:stop(),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
@@ -2463,6 +2482,11 @@ filter_keys_test() ->
     riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
     riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
+    riak_core_table_manager:start_link([
+       {?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
+       {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}
+    ]),
+    riak_core_bg_manager:start_link(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -2484,6 +2508,8 @@ filter_keys_test() ->
 
     riak_core_ring_manager:cleanup_ets(test),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
+    riak_kv_test_util:stop_process(riak_core_bg_manager),
+    riak_kv_test_util:stop_process(riak_core_table_manager),
     flush_msgs().
 
 %% include bitcask.hrl for HEADER_SIZE macro
@@ -2494,6 +2520,11 @@ filter_keys_test() ->
 bitcask_badcrc_test() ->
     riak_core_ring_manager:setup_ets(test),
     riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
+    riak_core_table_manager:start_link([
+       {?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
+       {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}
+    ]),
+    riak_core_bg_manager:start_link(),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
     DataDir = filename:join(bitcask_test_dir(), "0"),
@@ -2511,6 +2542,8 @@ bitcask_badcrc_test() ->
                                    S),
     riak_core_ring_manager:cleanup_ets(test),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
+    riak_kv_test_util:stop_process(riak_core_bg_manager),
+    riak_kv_test_util:stop_process(riak_core_table_manager),
     flush_msgs().
 
 

@@ -1202,6 +1202,15 @@ do_get_object(Bucket, Key, Mod, ModState) ->
         false ->
             case do_get_binary(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
+                    ObjSize = size(ObjBin),
+                    WarnObjSize = app_helper:get_env(riak_kv, warn_object_size, 2000000),
+                    case ObjSize > WarnObjSize of
+                        true ->
+                            lager:warning("Reading large object of size ~p from ~p/~p",
+                                          [ObjSize, Bucket, Key]);
+                        false ->
+                            ok
+                    end,
                     case riak_object:from_binary(Bucket, Key, ObjBin) of
                         {error, R} ->
                             throw(R);
@@ -1663,6 +1672,16 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
         false ->
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
+            WarnObjSize = app_helper:get_env(riak_kv, warn_object_size, 2000000),
+            ObjSize = size(EncodedVal),
+            case ObjSize > WarnObjSize of
+                true ->
+                    lager:warning("Writing large object of size ~p in ~p/~p",
+                                  [ObjSize, Bucket, Key]);
+                false ->
+                    ok
+            end,
+
             {Mod:put(Bucket, Key, IndexSpecs, EncodedVal, ModState), EncodedVal}
     end.
 

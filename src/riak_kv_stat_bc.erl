@@ -257,6 +257,8 @@ legacy_stat_map() ->
      {node_put_fsm_time_100, {{riak_kv,node, puts, time}, max}, histogram},
      {read_repairs, {{riak_kv,node,gets,read_repairs}, one}, spiral},
      {read_repairs_total, {{riak_kv,node,gets,read_repairs}, count}, spiral},
+     {skipped_read_repairs, {{riak_kv,node,gets,skipped_read_repairs}, one}, spiral},
+     {skipped_read_repairs_total, {{riak_kv,node,gets,skipped_read_repairs}, count}, spiral},
      {coord_redirs_total, {riak_kv,node,puts,coord_redirs}, counter},
      {executing_mappers, {riak_kv,mapper_count}, counter},
      {precommit_fail, {riak_kv, precommit_fail}, counter},

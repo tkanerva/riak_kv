@@ -206,6 +206,8 @@ do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
 do_update({read_repairs, Indices, Preflist}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
     do_repairs(Indices, Preflist);
+do_update(skipped_read_repairs) ->
+    folsom_metrics:notify_existing_metric({?APP, node, gets, skipped_read_repairs}, 1, spiral);
 do_update(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
 do_update(mapper_start) ->
@@ -359,6 +361,7 @@ stats() ->
      {[node, puts], spiral},
      {[node, puts, time], histogram},
      {[node, gets, read_repairs], spiral},
+     {[node, gets, skipped_read_repairs], spiral},
      {[node, puts, coord_redirs], counter},
      {[node, puts, fsm, active], counter},
      {[node, gets, fsm, active], counter},
@@ -520,6 +523,8 @@ stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, puts]);
 stats_from_update_arg({read_repairs, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+stats_from_update_arg(skipped_read_repairs) ->
+    [{{?APP, nodes, gets, skipped_read_repairs}, {metric, [], spiral, undefined}}];
 stats_from_update_arg(coord_redirs) ->
     [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
 stats_from_update_arg(mapper_start) ->

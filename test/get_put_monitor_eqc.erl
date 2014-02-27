@@ -172,8 +172,6 @@ get_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
     riak_kv_get_put_monitor:get_fsm_spawned(Pid),
-    % ugh, sleep; need to give time for the down message to get to the monitor.
-    timer:sleep(10),
     Pid.
 
 get_fsm_exit_normal(get, Pid) ->
@@ -197,7 +195,6 @@ put_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
     riak_kv_get_put_monitor:put_fsm_spawned(Pid),
-    timer:sleep(20),
     Pid.
 
 put_fsm_exit_normal(put, Pid) ->

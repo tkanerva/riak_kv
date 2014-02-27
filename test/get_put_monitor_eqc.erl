@@ -129,47 +129,10 @@ next_state(S, _Res, {call, _, _, [put, Pid]}) ->
     Puts2 = ordsets:del_element(Pid, S#state.put_fsm),
     S#state{put_fsm = Puts2}.
 
+postcondition(_, _, _) ->
+    true.
 
-postcondition(S, {call, _Mod, put_fsm_started, _Args}, Res) ->
-    check_state(S#state{put_fsm = [Res | S#state.put_fsm]});
-
-postcondition(S, {call, _Mod, get_fsm_started, _Args}, Res) ->
-    check_state(S#state{get_fsm = [Res | S#state.get_fsm]});
-
-postcondition(S, {call, _Mod, put_fsm_noproc, _Args}, _Res) ->
-    check_state(S);
-
-postcondition(S, {call, _Mod, get_fsm_noproc, _Args}, _Res) ->
-    check_state(S);
-
-postcondition(S, {call, _Mod, put_fsm_exit_error, _Args}, Res) ->
-    S2 = S#state{
-        put_fsm = ordsets:del_element(Res, S#state.put_fsm),
-        put_errors = S#state.put_errors + 1
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, get_fsm_exit_error, _Args}, Res) ->
-    S2 = S#state{
-        get_fsm = ordsets:del_element(Res, S#state.get_fsm),
-        get_errors = S#state.get_errors + 1
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, _NiceShutdown, [put, _]}, Res) ->
-    S2 = S#state{
-        put_fsm = ordsets:del_element(Res, S#state.put_fsm)
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, _NiceShutdown, [get, _]}, Res) ->
-    S2 = S#state{
-        get_fsm = ordsets:del_element(Res, S#state.get_fsm)
-    },
-    check_state(S2).
-
-
-check_state(S) ->
+invariant(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
     % wait for folsom stats to settle; if we check too quick, folsom won't have

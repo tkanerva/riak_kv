@@ -6,6 +6,11 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(PUTS_ACTIVE, {riak_kv, node, puts, fsm, active}).
+-define(GETS_ACTIVE, {riak_kv, node, gets, fsm, active}).
+-define(PUTS_ERRORS, {riak_kv, node, puts, fsm, errors}).
+-define(GETS_ERRORS, {riak_kv, node, gets, fsm, errors}).
+
 -compile([export_all]).
 
 -record(state, {
@@ -135,9 +140,6 @@ postcondition(_, _, _) ->
 invariant(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
-    % wait for folsom stats to settle; if we check too quick, folsom won't have
-    % finished updating. Timers suck, so maybe something better will come along
-    timer:sleep(10),
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
@@ -148,10 +150,19 @@ invariant(S) ->
     ],
 
     [ begin
-        ?assertEqual(Expected, folsom_metrics:get_metric_value(Metric))
-    end || {Metric, Expected} <- MetricExpects],
+        Val = folsom_metrics:get_metric_value(Metric),
+        ?assertEqual(Expected, Val)
+      end || {Metric, Expected} <- MetricExpects],
 
     true.
+
+poll_stat_change(Metric, OriginalValue) ->
+    case folsom_metrics:get_metric_value(Metric) of
+        OriginalValue -> 
+            poll_stat_change(Metric, OriginalValue);
+        _ ->
+            ok
+    end.
 
 %% wait for all fake fsms to finish, so the monitors
 %% get to finish before folsom is stopped.
@@ -165,7 +176,9 @@ exit_gracefully(S) ->
 
 get_fsm_started() ->
     Pid = fake_fsm(),
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     riak_kv_get_put_monitor:get_fsm_spawned(Pid),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_noproc() ->
@@ -183,12 +196,16 @@ get_fsm_exit_shutdown(get, Pid) ->
     Pid.
 
 get_fsm_exit_error(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ERRORS),
     end_and_wait(Pid, unnatural),
+    poll_stat_change(?GETS_ERRORS, Original),
     Pid.
 
 put_fsm_started() ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     Pid = fake_fsm(),
     riak_kv_get_put_monitor:put_fsm_spawned(Pid),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_noproc() ->
@@ -206,7 +223,9 @@ put_fsm_exit_shutdown(put, Pid) ->
     Pid.
 
 put_fsm_exit_error(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ERRORS),
     end_and_wait(Pid, unnatural),
+    poll_stat_change(?PUTS_ERRORS, Original),
     Pid.
 
 %% ====================================================================

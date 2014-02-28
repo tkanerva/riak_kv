@@ -28,7 +28,7 @@ eqc_test_() ->
                     ok
             end,
      fun(_) ->
-             [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]]
+             ok
      end, [
            {timeout, 120, ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop()))))}
           ]}.
@@ -43,9 +43,10 @@ check() ->
     check(prop(), current_counterexample()).
 
 prop() ->
+    error_logger:tty(false),
+    crypto:start(),
     ?FORALL(Cmds, commands(?MODULE), begin
-        crypto:start(),
-        application:start(folsom),        
+        reset_test_state(),
         {_,State,Res} = run_commands(?MODULE, Cmds),
         case Res of
             ok ->
@@ -58,17 +59,21 @@ prop() ->
         aggregate(command_names(Cmds), Res == ok)
     end).
 
+reset_test_state() ->
+    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
+    application:stop(folsom),
+    application:start(folsom),
+    {ok, Cache} = riak_core_stat_cache:start_link(),
+    {ok, Pid} = riak_kv_stat:start_link(),
+    unlink(Pid),
+    unlink(Cache).
+
+
 %% ====================================================================
 %% eqc_statem callbacks
 %% ====================================================================
 
 initial_state() ->
-    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
-    application:start(folsom),
-    {ok, Cache} = riak_core_stat_cache:start_link(),
-    {ok, Pid} = riak_kv_stat:start_link(),
-    unlink(Pid),
-    unlink(Cache),
     #state{}.
 
 command(S) ->
@@ -151,6 +156,10 @@ invariant(S) ->
 
     [ begin
         Val = folsom_metrics:get_metric_value(Metric),
+        case Val of 
+            Expected -> ok;
+            _ -> io:format(user, "Failed Metric = ~p~n", [Metric])
+        end,
         ?assertEqual(Expected, Val)
       end || {Metric, Expected} <- MetricExpects],
 
@@ -188,11 +197,15 @@ get_fsm_noproc() ->
     Pid.
 
 get_fsm_exit_normal(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     end_and_wait(Pid, normal),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_exit_shutdown(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     end_and_wait(Pid, shutdown),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_exit_error(get, Pid) ->
@@ -215,11 +228,15 @@ put_fsm_noproc() ->
     Pid.
 
 put_fsm_exit_normal(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     end_and_wait(Pid, normal),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_exit_shutdown(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     end_and_wait(Pid, shutdown),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_exit_error(put, Pid) ->
@@ -241,8 +258,8 @@ fake_fsm_loop() ->
     end.
 
 end_and_wait(Pid, Cause) ->
-    Pid ! Cause,
     Monref = erlang:monitor(process, Pid),
+    Pid ! Cause,
     receive
         {'DOWN', Monref, process, Pid, _} ->
             ok

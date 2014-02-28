@@ -143,10 +143,10 @@ invariant(S) ->
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
-        {{riak_kv, node, puts, fsm, active}, length(PutList)},
-        {{riak_kv, node, gets, fsm, active}, length(GetList)},
-        {{riak_kv, node, puts, fsm, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
-        {{riak_kv, node, gets, fsm, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
+        {?PUTS_ACTIVE, length(PutList)},
+        {?GETS_ACTIVE, length(GetList)},
+        {?PUTS_ERRORS, [{count, PutErrCount}, {one, PutErrCount}]},
+        {?GETS_ERRORS, [{count, GetErrCount}, {one, GetErrCount}]}
     ],
 
     [ begin

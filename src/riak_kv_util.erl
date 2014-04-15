@@ -348,11 +348,11 @@ ack_incorrect_keys(Pid, Ref) ->
     Pid ! {ack_keys, Ref}.
 
 mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
-    riak_core_vnode_master:sync_command({Idx, node()},
+    Res = riak_core_vnode_master:sync_command({Idx, node()},
                                         {fix_incorrect_index_entry, {done, ForUpgrade}},
                                         riak_kv_vnode_master),
     lager:info("index reformat: marked partition ~p as fixed", [Idx]),
-    ok;
+    Res;
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 

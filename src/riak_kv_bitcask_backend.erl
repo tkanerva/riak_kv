@@ -53,6 +53,10 @@
 -include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
+-define(UPGRADE_CHECK_INTERVAL, timer:minutes(1)).
+-define(UPGRADE_FILE, "upgrade.txt").
+-define(MERGE_FILE, "merge.txt").
+-define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
 
@@ -71,6 +75,7 @@
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
+-type version() :: {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 
 %% ===================================================================
 %% Public API
@@ -155,12 +160,15 @@ start(Partition, Config0) ->
             PartitionStr = integer_to_list(Partition),
             case get_data_dir(DataRoot, PartitionStr) of
                 {ok, DataDir} ->
+                    BitcaskDir = filename:join(DataRoot, DataDir),
+                    UpgradeRet = maybe_start_upgrade(BitcaskDir),
                     BitcaskOpts = set_mode(read_write, Config),
-                    case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of 
+                    case bitcask:open(BitcaskDir, BitcaskOpts) of
                         Ref when is_reference(Ref) ->
                             check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
+                            maybe_schedule_upgrade_check(Ref, UpgradeRet),
                             {ok, #state{ref=Ref,
                                         data_dir=DataDir,
                                         root=DataRoot,
@@ -430,6 +438,30 @@ callback(Ref,
     end,
     schedule_merge(Ref),
     {ok, State};
+callback(Ref,
+         upgrade_check,
+         #state{ref=Ref,
+                data_dir=DataDir,
+                root=DataRoot}=State) when is_reference(Ref) ->
+    BitcaskRoot = filename:join(DataRoot, DataDir),
+    case check_upgrade(BitcaskRoot) of
+        finished ->
+            case finalize_upgrade(BitcaskRoot) of
+                {ok, Vsn} ->
+                    lager:info("Finished upgrading to Bitcask ~s in ~s",
+                               [version_to_str(Vsn), BitcaskRoot]),
+                    {ok, State};
+                {error, EndErr} ->
+                    lager:error("Finalizing backend upgrade : ~p", [EndErr]),
+                    {ok, State}
+            end;
+        pending ->
+            _ = schedule_upgrade_check(Ref),
+            {ok, State};
+        {error, Reason} ->
+            lager:error("Aborting upgrade in ~s : ~p", [BitcaskRoot, Reason]),
+            {ok, State}
+    end;
 %% Ignore callbacks for other backends so multi backend works
 callback(_Ref, _Msg, State) ->
     {ok, State}.
@@ -547,7 +579,22 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
     riak_kv_backend:callback_after(SyncIntervalMs, Ref, {sync, SyncIntervalMs}).
 
 schedule_merge(Ref) when is_reference(Ref) ->
-    riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
+    Interval = app_helper:get_env(riak_kv, bitcask_merge_check_interval,
+                                  ?MERGE_CHECK_INTERVAL),
+    riak_kv_backend:callback_after(Interval, Ref, merge_check).
+
+-spec schedule_upgrade_check(reference()) -> reference().
+schedule_upgrade_check(Ref) when is_reference(Ref) ->
+    riak_kv_backend:callback_after(?UPGRADE_CHECK_INTERVAL, Ref,
+                                   upgrade_check).
+
+-spec maybe_schedule_upgrade_check(reference(),
+                                   {upgrading, version()} | no_upgrade) -> ok.
+maybe_schedule_upgrade_check(Ref, {upgrading, _}) ->
+    _ = schedule_upgrade_check(Ref),
+    ok;
+maybe_schedule_upgrade_check(_Ref, no_upgrade) ->
+    ok.
 
 %% @private
 get_data_dir(DataRoot, Partition) ->
@@ -585,6 +632,208 @@ set_mode(read_write, Config) ->
     Config1 = lists:keystore(read_write, 1, Config, {read_write, true}),
     lists:keydelete(read_only, 1, Config1).
 
+-spec read_version(File::string()) -> undefined | version().
+read_version(File) ->
+    case file:read_file(File) of
+        {ok, VsnContents} ->
+            % Crude parser to ignore common user introduced variations
+            VsnLines = [binary:replace(B, [<<" ">>, <<"\t">>], <<>>, [global])
+                        || B <- binary:split(VsnContents,
+                                             [<<"\n">>, <<"\r">>, <<"\r\n">>])],
+            VsnLine = [L || L <- VsnLines, L /= <<>>],
+            case VsnLine of
+                [VsnStr] ->
+                    try
+                        version_from_str(binary_to_list(VsnStr))
+                    catch
+                        _:_ ->
+                            undefined
+                    end;
+                _ ->
+                    undefined
+            end;
+        {error, _} ->
+            undefined
+    end.
+
+-spec bitcask_files(string()) -> {ok, [string()]} | {error, term()}.
+bitcask_files(Dir) ->
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            BitcaskFiles = [F || F <- Files, lists:suffix(".bitcask.data", F)],
+            {ok, BitcaskFiles};
+        {error, Err} ->
+            {error, Err}
+    end.
+
+-spec has_bitcask_files(string()) -> boolean() | {error, term()}.
+has_bitcask_files(Dir) ->
+    case bitcask_files(Dir) of
+        {ok, Files} ->
+            case Files of
+                [] -> false;
+                _ -> true
+            end;
+        {error, Err} ->
+            {error, Err}
+    end.
+
+-spec needs_upgrade(version() | undefined, version()) -> boolean().
+needs_upgrade(undefined, _) ->
+    true;
+needs_upgrade({A1, B1, _}, {A2, B2, _})
+  when {A1, B1} =< {1, 6}, {A2, B2} > {1, 6} ->
+    true;
+needs_upgrade(_, _) ->
+    false.
+
+-spec maybe_start_upgrade(string()) -> no_upgrade | {upgrading, version()}.
+maybe_start_upgrade(Dir) ->
+    % Are we already upgrading?
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    UpgradingVsn = read_version(UpgradeFile),
+    case UpgradingVsn of
+        undefined ->
+            % No, maybe if previous data needs upgrade
+            maybe_start_upgrade_if_bitcask_files(Dir);
+        _ ->
+            lager:info("Continuing upgrade to version ~s in ~s",
+                       [version_to_str(UpgradingVsn), Dir]),
+            {upgrading, UpgradingVsn}
+    end.
+
+-spec maybe_start_upgrade_if_bitcask_files(string()) ->
+    no_upgrade | {upgrading, version()}.
+maybe_start_upgrade_if_bitcask_files(Dir) ->
+    NewVsn = bitcask_version(),
+    VersionFile = filename:join(Dir, ?VERSION_FILE),
+    CurrentVsn = read_version(VersionFile),
+    case has_bitcask_files(Dir) of
+        true ->
+            case needs_upgrade(CurrentVsn, NewVsn) of
+                true ->
+                    NewVsnStr = version_to_str(NewVsn),
+                    case start_upgrade(Dir, CurrentVsn, NewVsn) of
+                        ok ->
+                            UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+                            write_version(UpgradeFile, NewVsn),
+                            lager:info("Starting upgrade to version ~s in ~s",
+                                       [NewVsnStr, Dir]),
+                            {upgrading, NewVsn};
+                        {error, UpgradeErr} ->
+                            lager:error("Failed to start upgrade to version ~s"
+                                        " in ~s : ~p",
+                                        [NewVsnStr, Dir, UpgradeErr]),
+                            no_upgrade
+                    end;
+                false ->
+                    case CurrentVsn == NewVsn of
+                        true ->
+                            no_upgrade;
+                        false ->
+                            write_version(VersionFile, NewVsn),
+                            no_upgrade
+                    end
+            end;
+        false ->
+            no_upgrade;
+        {error, Err} ->
+            lager:error("Failed to check for bitcask files in ~s."
+                        " Can not determine if an upgrade is needed : ~p",
+                        [Dir, Err]),
+            no_upgrade
+    end.
+
+% @doc Start the upgrade process for the given old/new version pair.
+-spec start_upgrade(string(), version() | undefined, version()) ->
+    ok | {error, term()}.
+start_upgrade(Dir, OldVsn, NewVsn)
+  when OldVsn < {1, 7, 0}, NewVsn >= {1, 7, 0} ->
+    % NOTE: The guard handles old version being undefined, as atom < tuple
+    % That is always the case with versions < 1.7.0 anyway.
+    case bitcask_files(Dir) of
+        {ok, Files} ->
+            % Write merge.txt with a list of all bitcask files to merge
+            MergeFile = filename:join(Dir, ?MERGE_FILE),
+            MergeList = string:join(Files, "\n"),
+            case riak_core_util:replace_file(MergeFile, MergeList) of
+                ok ->
+                    ok;
+                {error, WriteErr} ->
+                    {error, WriteErr}
+            end;
+        {error, BitcaskReadErr} ->
+            {error, BitcaskReadErr}
+    end.
+
+%% @doc Checks progress of an ongoing backend upgrade.
+-spec check_upgrade(Dir :: string()) -> pending | finished | {error, term()}.
+check_upgrade(Dir) ->
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    case filelib:is_regular(UpgradeFile) of
+        true ->
+            % Look for merge file. When all merged, Bitcask deletes it.
+            MergeFile = filename:join(Dir, ?MERGE_FILE),
+            case filelib:is_regular(MergeFile) of
+                true ->
+                    pending;
+                false ->
+                    finished
+            end;
+        false ->
+            % Flattening so it prints like a string
+            Reason = lists:flatten(io_lib:format("Missing upgrade file ~s",
+                                                 [UpgradeFile])),
+            {error, Reason}
+    end.
+
+-spec version_from_str(string()) -> version().
+version_from_str(VsnStr) ->
+    [Major, Minor, Patch] =
+        [list_to_integer(Tok) || Tok <- string:tokens(VsnStr, ".")],
+    {Major, Minor, Patch}.
+
+-spec bitcask_version() -> version().
+bitcask_version() ->
+    version_from_str(bitcask_version_str()).
+
+-spec bitcask_version_str() -> string().
+bitcask_version_str() ->
+    [BitcaskVsn] =
+        [Vsn || {bitcask, _, Vsn} <- application:which_applications()],
+    BitcaskVsn.
+
+-spec version_to_str(version()) -> string().
+version_to_str({Major, Minor, Patch}) ->
+    io_lib:format("~p.~p.~p", [Major, Minor, Patch]).
+
+-spec write_version(File::string(), Vsn::string() | version()) ->
+    ok | {error, term()}.
+write_version(File, {_, _, _} = Vsn) ->
+    write_version(File, version_to_str(Vsn));
+write_version(File, Vsn) ->
+    riak_core_util:replace_file(File, Vsn).
+
+-spec finalize_upgrade(Dir :: string()) -> {ok, version()} | {error, term()}.
+finalize_upgrade(Dir) ->
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    case read_version(UpgradeFile) of
+        undefined ->
+            {error, no_upgrade_version};
+        Vsn ->
+            VsnFile = filename:join(Dir, ?VERSION_FILE),
+            case write_version(VsnFile, Vsn) of
+                ok ->
+                    case file:delete(UpgradeFile) of
+                        ok ->
+                            {ok, Vsn};
+                        {error, DelErr} ->
+                            {error, DelErr}
+                    end;
+                {error, WriteErr} ->
+                    {error, WriteErr}
+            end
+    end.
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================

@@ -576,3 +576,10 @@ end
  fun(Value)->
     is_boolean(Value) orelse (is_integer(Value) andalso Value =< 9 andalso Value >= 0)
  end}.
+
+%% @doc Time in between the checks that trigger Bitcask merges.
+{mapping, "bitcask.merge_check_interval", "riak_kv.bitcask_merge_check_interval", [
+  {default, "3m"},
+  {datatype, {duration, ms}},
+  hidden
+]}.

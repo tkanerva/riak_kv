@@ -583,3 +583,11 @@ end
   {datatype, {duration, ms}},
   hidden
 ]}.
+
+%% @doc Jitter used to randomize the time in between the checks that trigger
+%% Bitcask merges.
+{mapping, "bitcask.merge_check_jitter", "riak_kv.bitcask_merge_check_jitter", [
+  {default, "1m"},
+  {datatype, {duration, ms}},
+  hidden
+]}.

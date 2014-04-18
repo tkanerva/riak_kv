@@ -49,6 +49,7 @@
 -include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
+-define(MERGE_CHECK_JITTER, timer:minutes(1)).
 -define(UPGRADE_CHECK_INTERVAL, timer:minutes(1)).
 -define(UPGRADE_FILE, "upgrade.txt").
 -define(MERGE_FILE, "merge.txt").
@@ -134,6 +135,7 @@ make_bk(1, Bucket, Key) ->
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config0) ->
+    random:seed(erlang:now()),
     {Config, KeyVsn} = 
         case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
             false -> 
@@ -420,11 +422,16 @@ callback(Ref,
                 data_dir=DataDir,
                 opts=BitcaskOpts,
                 root=DataRoot}=State) when is_reference(Ref) ->
-    case bitcask:needs_merge(Ref) of
-        {true, Files} ->
-            BitcaskRoot = filename:join(DataRoot, DataDir),
-            bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
-        false ->
+    case bitcask_merge_worker:status() of
+        {0, _} ->
+            case bitcask:needs_merge(Ref) of
+                {true, Files} ->
+                    BitcaskRoot = filename:join(DataRoot, DataDir),
+                    bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
+                false ->
+                    ok
+            end;
+        _ ->
             ok
     end,
     schedule_merge(Ref),
@@ -555,7 +562,11 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 schedule_merge(Ref) when is_reference(Ref) ->
     Interval = app_helper:get_env(riak_kv, bitcask_merge_check_interval,
                                   ?MERGE_CHECK_INTERVAL),
-    riak_kv_backend:callback_after(Interval, Ref, merge_check).
+    Jitter = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
+                                ?MERGE_CHECK_JITTER),
+    FinalInterval = Interval - Jitter + trunc(2 * random:uniform() * Jitter),
+    lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
+    riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
 
 -spec schedule_upgrade_check(reference()) -> reference().
 schedule_upgrade_check(Ref) when is_reference(Ref) ->

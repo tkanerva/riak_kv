@@ -591,3 +591,9 @@ end
   {datatype, {duration, ms}},
   hidden
 ]}.
+%% @doc Maximum amount of data to merge in one go in the Bitcask backend.
+{mapping, "bitcask.max_merge_size", "riak_kv.bitcask_max_merge_size", [
+  {default, "100GB"},
+  {datatype, bytesize},
+  hidden
+]}.

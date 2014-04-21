@@ -422,16 +422,12 @@ callback(Ref,
                 data_dir=DataDir,
                 opts=BitcaskOpts,
                 root=DataRoot}=State) when is_reference(Ref) ->
-    case bitcask_merge_worker:status() of
-        {0, _} ->
-            case bitcask:needs_merge(Ref) of
-                {true, Files} ->
-                    BitcaskRoot = filename:join(DataRoot, DataDir),
-                    bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
-                false ->
-                    ok
-            end;
-        _ ->
+    case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+        true ->
+            BitcaskRoot = filename:join(DataRoot, DataDir),
+            merge_check(Ref, BitcaskRoot, BitcaskOpts);
+        false ->
+            lager:debug("Skipping merge check: KV service not yet up"),
             ok
     end,
     schedule_merge(Ref),
@@ -467,6 +463,23 @@ callback(_Ref, _Msg, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+% @private If no pending merges, check if files need to be merged.
+merge_check(Ref, BitcaskRoot, BitcaskOpts) ->
+    case bitcask_merge_worker:status() of
+        {0, _} ->
+            MaxMergeSize = app_helper:get_env(riak_kv,
+                                              bitcask_max_merge_size),
+            case bitcask:needs_merge(Ref, [{max_merge_size, MaxMergeSize}]) of
+                {true, Files} ->
+                    bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
+                false ->
+                    ok
+            end;
+        _ ->
+            lager:debug("Skipping merge check: Pending merges"),
+            ok
+    end.
 
 %% @private
 %% On linux there is a kernel bug that won't allow fcntl to add O_SYNC

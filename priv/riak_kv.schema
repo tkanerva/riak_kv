@@ -591,6 +591,21 @@ end
   {datatype, {duration, ms}},
   hidden
 ]}.
+
+{translation, "riak_kv.bitcask_merge_check_jitter",
+ fun(Conf) ->
+         Interval = cuttlefish:conf_get("bitcask.merge_check_interval", Conf),
+         Jitter = cuttlefish:conf_get("bitcask.merge_check_jitter", Conf),
+         case Jitter > Interval of
+             true ->
+                 cuttlefish:invalid("bitcask.merge_check_jitter should be "
+                                    "changed to be less than "
+                                    "bitcask.merge_check_interval");
+             false ->
+                 Jitter
+         end
+ end}.
+
 %% @doc Maximum amount of data to merge in one go in the Bitcask backend.
 {mapping, "bitcask.max_merge_size", "riak_kv.bitcask_max_merge_size", [
   {default, "100GB"},

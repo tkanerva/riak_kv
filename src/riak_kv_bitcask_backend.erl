@@ -49,7 +49,7 @@
 -include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
--define(MERGE_CHECK_JITTER, timer:minutes(1)).
+-define(MERGE_CHECK_JITTER, 30).
 -define(UPGRADE_CHECK_INTERVAL, timer:minutes(1)).
 -define(UPGRADE_FILE, "upgrade.txt").
 -define(MERGE_FILE, "merge.txt").
@@ -575,9 +575,10 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 schedule_merge(Ref) when is_reference(Ref) ->
     Interval = app_helper:get_env(riak_kv, bitcask_merge_check_interval,
                                   ?MERGE_CHECK_INTERVAL),
-    Jitter = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
-                                ?MERGE_CHECK_JITTER),
-    FinalInterval = Interval - Jitter + trunc(2 * random:uniform() * Jitter),
+    JitterPerc = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
+                                    ?MERGE_CHECK_JITTER),
+    Jitter = Interval * JitterPerc,
+    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
     lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
     riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
 

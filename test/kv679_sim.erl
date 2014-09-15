@@ -103,21 +103,21 @@ vnode_data_loss(Mod) ->
     stop(),
     ?assertEqual([b,c], lists:sort(Values)).
 
-%% @doc doomstone. In this scenario, a tombstone that has not been
-%% reaped (why?) can be handed off or read repaired and clobber new
-%% values. In this case, it seems we should _know_ that the new values
-%% are _not_ concurrent with, but dominate the tombstone. To pass this
-%% scenario the new value must survive, and the tombstone be dropped.
-doomstone(Mod) ->
-    _ = start_link(Mod),
-    %% write something
-    write(a),
-    {Ctx, _} = read(),
-    Ctx = delete(Ctx),
-    partial_reap(Ctx),
-    write(b),
-    {_, Val} = read(),
-    ?assertEqual([b], Val).
+%% %% @doc doomstone. In this scenario, a tombstone that has not been
+%% %% reaped (why?) can be handed off or read repaired and clobber new
+%% %% values. In this case, it seems we should _know_ that the new values
+%% %% are _not_ concurrent with, but dominate the tombstone. To pass this
+%% %% scenario the new value must survive, and the tombstone be dropped.
+%% doomstone(Mod) ->
+%%     _ = start_link(Mod),
+%%     %% write something
+%%     write(a),
+%%     {Ctx, _} = read(),
+%%     Ctx = delete(Ctx),
+%%     partial_reap(Ctx),
+%%     write(b),
+%%     {_, Val} = read(),
+%%     ?assertEqual([b], Val).
 
 write(Value) -> gen_server:call(?MODULE, {write, Value}).
 

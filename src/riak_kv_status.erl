@@ -38,7 +38,11 @@ statistics() ->
     riak_kv_stat:get_stats() ++ riak_core_stat:get_stats().
 
 ringready() ->
-    riak_core_status:ringready().
+    Status = riak_core_status:ringready(),
+    Output = riak_core_status:parse(Status,
+                                    fun riak_core_console:write_status/2,
+                                    riak_core_console:new_context()),
+    io:format("~s", [Output]).
 
 transfers() ->
     riak_core_status:transfers().

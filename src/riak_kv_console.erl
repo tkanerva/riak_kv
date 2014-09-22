@@ -243,18 +243,10 @@ reip([OldNode, NewNode]) ->
 -spec(ringready([]) -> ok | error).
 ringready([]) ->
     try
-        case riak_core_status:ringready() of
-            {ok, Nodes} ->
-                io:format("TRUE All nodes agree on the ring ~p\n", [Nodes]);
-            {error, {different_owners, N1, N2}} ->
-                io:format("FALSE Node ~p and ~p list different partition owners\n", [N1, N2]),
-                error;
-            {error, {nodes_down, Down}} ->
-                io:format("FALSE ~p down.  All nodes need to be up to check.\n", [Down]),
-                error
-        end
+        riak_kv_status:ringready()
     catch
         Exception:Reason ->
+            lager:error("stack trace = ~p", [erlang:get_stacktrace()]),
             lager:error("Ringready failed ~p:~p", [Exception,
                     Reason]),
             io:format("Ringready failed, see log for details~n"),

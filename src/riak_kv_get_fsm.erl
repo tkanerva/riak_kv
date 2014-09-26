@@ -46,6 +46,8 @@
                   {details, true} |
                   details |
                   {sloppy_quorum, boolean()} | %% default = true
+                  {delete_mode, keep | immediate | pos_integer()} |
+                                               %% default is [riak_kv].delete_mode config
                   {n_val, pos_integer()} |     %% default = bucket props
                   {crdt_op, true | undefined}. %% default = undefined
 
@@ -432,7 +434,8 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace }) ->
 %% Get core will only requestion deletion if all vnodes
 %% replies with the same value.
 maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
-                              req_id=ReqId, bkey=BKey}) ->
+                              req_id=ReqId, bkey=BKey, options=Options,
+                              bucket_props=BucketProps }) ->
     %% Check sent to a perfect preflist and we can delete
     IdealNodes = [{I, Node} || {{I, Node}, primary} <- Sent],
     NotCustomN = not using_custom_n_val(StateData),
@@ -440,8 +443,15 @@ maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
         true ->
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [1],
                     ["maybe_delete", "triggered"]),
-            riak_kv_vnode:del(IdealNodes, BKey, ReqId);
-        _ -> 
+            DeleteMode =
+                case proplists:get_value(delete_mode, Options) of
+                    undefined ->
+                        proplists:get_value(delete_mode, BucketProps);
+                    BucketValue ->
+                        BucketValue
+                end,
+            riak_kv_vnode:del(IdealNodes, BKey, ReqId, DeleteMode);
+        _ ->
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
             nop

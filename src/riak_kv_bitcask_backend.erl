@@ -96,12 +96,16 @@ capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
 %% @doc Transformation functions for the keys coming off the disk.
+key_transform_to_1({tombstone, Key}) ->
+    key_transform_to_1(Key);
 key_transform_to_1(<<?VERSION_1:7, _:1, _Rest/binary>> = Key) ->
     Key;
 key_transform_to_1(<<131:8,_Rest/bits>> = Key0) ->
     {Bucket, Key} = binary_to_term(Key0),
     make_bk(?VERSION_BYTE, Bucket, Key).
 
+key_transform_to_0({tombstone, Key}) ->
+    key_transform_to_0(Key);
 key_transform_to_0(<<?VERSION_1:7,_Rest/bits>> = Key0) ->
     term_to_binary(bk_to_tuple(Key0));
 key_transform_to_0(<<131:8,_Rest/binary>> = Key) ->

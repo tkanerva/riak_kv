@@ -58,9 +58,43 @@
       end,
     {list_to_binary(Name),  BackendModule, BackendConfig}
   end || {"$name", Name} <- BackendNames],
-  case Backends of
-      [] -> throw(unset);
-      _ -> Backends
+ 
+  DataRoots = lists:foldl(fun({Name,_,Options}, Acc)->
+    case lists:keyfind(data_root, 1, Options) of 
+      {data_root, Path} -> orddict:append(Path, Name, Acc); 
+      false -> Acc 
+      end
+    end,
+    orddict:new(),
+    Backends),
+
+  BadDataRoots = orddict:filter(fun(_, V) when length(V) > 1 -> true;
+                    (_,_) -> false end, 
+                 DataRoots),
+
+  case BadDataRoots of 
+    [] ->
+      %% This is the successful case and is good.
+      case Backends of
+        [] -> throw(unset);  %% make cuttlefish:throw instead
+        _ -> Backends
+      end;
+    List -> 
+      %% This means that there's a non-unique dataroot and that is a bad thing.
+      ErrorString = lists:foldl(fun({InvalidPath, ViolatingBackends}, Acc)->
+        lists:append(
+          lists:flatten(io_lib:format("\t~s: ~s ~n",[InvalidPath, 
+            lists:foldl(fun (E, Acc) -> Acc ++ ", " ++ binary_to_list(E) end, 
+                        binary_to_list(hd(ViolatingBackends)), 
+                        tl(ViolatingBackends))
+            ])), Acc)
+        end,
+        [],
+        List),      
+
+      cuttlefish:invalid(
+        lists:flatten(io_lib:format(
+          "Data root conflicts in multi_backend configuration:~n~s", [ErrorString]))) 
   end
  end
 }.

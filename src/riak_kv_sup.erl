@@ -2,7 +2,7 @@
 %%
 %% riak_sup: supervise the core Riak services
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -93,6 +93,10 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
+    Notifier = {riak_kv_notifier,
+                {riak_kv_notifier, start_link, []},
+                permanent, 5000, worker, [riak_kv_notifier]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
@@ -111,7 +115,8 @@ init([]) ->
         JSSup,
         MapJSPool,
         ReduceJSPool,
-        HookJSPool
+        HookJSPool,
+        Notifier
     ]),
 
     % Run the proesses...

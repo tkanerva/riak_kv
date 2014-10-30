@@ -2,7 +2,7 @@
 %%
 %% riak_kv_vnode: VNode Implementation
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -96,13 +96,13 @@
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
 -else.
--define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX(Obj, Reason, Partition), riak_kv_notifier:notify({index, Obj, Reason, Partition})).
 -endif.
 
 -ifdef(TEST).
 -define(YZ_SHOULD_HANDOFF(X), true).
 -else.
--define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
+-define(YZ_SHOULD_HANDOFF(X), riak_kv_notifier:notify({should_handoff, X})).
 -endif.
 
 -record(mrjob, {cachekey :: term(),

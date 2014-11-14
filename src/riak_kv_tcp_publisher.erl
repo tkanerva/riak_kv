@@ -27,23 +27,19 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 
+%% internal export
+-export([socket_handler/1]).
+
 -record(state, {
-          lsock,
-          aref,
-          subs = []
+          sockpid
          }).
 
 init([]) ->
     [{_, Port}] = app_helper:get_env(riak_api, pbevents, [{"0.0.0.0", 8092}]),
-    ListenOpts = [binary,{active,false},{reuseaddr,true}],
-    {ok, LS} = gen_tcp:listen(Port, ListenOpts),
-    {ok, ARef} = prim_inet:async_accept(LS, -1),
-    {ok, #state{lsock=LS, aref=ARef}}.
+    SockPid = spawn_link(?MODULE, socket_handler, [Port]),
+    {ok, #state{sockpid=SockPid}}.
 
-handle_event(_Obj, #state{subs=[]}=State) ->
-    %% no subscribers, so do nothing
-    {ok, State};
-handle_event(Obj, #state{subs=Subs}=State) ->
+handle_event(Obj, #state{sockpid=SockPid}=State) ->
     true = riak_object:is_robject(Obj),
     Content = riak_object:get_contents(Obj),
     Vc = riak_object:vclock(Obj),
@@ -58,24 +54,43 @@ handle_event(Obj, #state{subs=Subs}=State) ->
                   Msg0#rpbputresp{bucket=Bucket}
           end,
     {ok, EncMsg} = riak_kv_pb_object:encode(Msg),
-    [gen_tcp:send(S, EncMsg) || S <- Subs],
+    SockPid ! {send, EncMsg},
     {ok, State}.
 
 handle_call(_Request, State) ->
     Reply = ok,
     {ok, Reply, State}.
 
-handle_info({inet_async,LS,ARef,{ok,Sub}}, #state{lsock=LS,aref=ARef}=State) ->
-    inet_db:register_socket(Sub, inet_tcp),
-    Subs = [Sub|State#state.subs],
-    {ok, State#state{subs=Subs}};
 handle_info(_Info, State) ->
     {ok, State}.
 
-terminate(_Reason, #state{lsock=LS, subs=Subs}) ->
-    lists:foreach(fun(S) -> gen_tcp:close(S) end, Subs),
-    gen_tcp:close(LS),
+terminate(_Reason, #state{sockpid=SockPid}) ->
+    SockPid ! stop,
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%% TODO: an unsupervised socket handler process, needs to be coded better
+socket_handler(Port) ->
+    ListenOpts = [binary,{active,false},{reuseaddr,true}],
+    {ok, LS} = gen_tcp:listen(Port, ListenOpts),
+    {ok, ARef} = prim_inet:async_accept(LS, -1),
+    socket_handler(LS, ARef, []).
+socket_handler(LS, ARef, Subs) ->
+    receive
+        {inet_async,LS,ARef,{ok,Sub}} ->
+            inet_db:register_socket(Sub, inet_tcp),
+            inet:setopts(Sub, [{active,once}]),
+            {ok, NewARef} = prim_inet:async_accept(LS, -1),
+            socket_handler(LS, NewARef, [Sub|Subs]);
+        {send, Data} ->
+            [gen_tcp:send(S, Data) || S <- Subs],
+            socket_handler(LS, ARef, Subs);
+        stop ->
+            lists:foreach(fun(S) -> gen_tcp:close(S) end, Subs),
+            gen_tcp:close(LS);
+        {tcp_closed,Sub} ->
+            NewSubs = lists:delete(Sub,Subs),
+            socket_handler(LS, ARef, NewSubs)
+    end.

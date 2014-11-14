@@ -103,11 +103,19 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    exometer:get_value([?PFX, ?APP, node, gets, fsm, active]).
+    counter_value([?PFX, ?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    exometer:get_value([?PFX, ?APP, node, puts, fsm, active]).
+    counter_value([?PFX, ?APP, node, puts, fsm, active]).
+
+counter_value(Name) ->
+    case exometer:get_value(Name, [value]) of
+	{ok, [{value, N}]} ->
+	    N;
+	_ ->
+	    0
+    end.
 
 stop() ->
     gen_server:cast(?SERVER, stop).
@@ -126,17 +134,6 @@ handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
     {reply, Rep, State}.
 
-handle_cast({re_register_stat, Arg}, State) ->
-    %% To avoid massive message queues
-    %% riak_kv stats are updated in the calling process
-    %% @see `update/1'.
-    %% The downside is that errors updating a stat don't crash
-    %% the server, so broken stats stay broken.
-    %% This re-creates the same behaviour as when a brokwn stat
-    %% crashes the gen_server by re-registering that stat.
-    #state{repair_mon={Pid, _Mon}} = State,
-    Pid ! {re_register_stat, Arg},
-    {noreply, State};
 handle_cast({monitor, Type, Pid}, State) ->
     case proplists:get_value(Type, State#state.monitors) of
         Monitor when is_pid(Monitor) ->
@@ -600,9 +597,6 @@ rbe_val(_) ->
 %% This loop is spawned as a process to avoid that.
 stat_repair_loop() ->
     receive
-        {re_register_stat, Arg} ->
-            re_register_stat(Arg),
-            stat_repair_loop();
         {'DOWN', _, process, _, _} ->
             ok;
         _ ->
@@ -612,108 +606,6 @@ stat_repair_loop() ->
 stat_repair_loop(Dad) ->
     erlang:monitor(process, Dad),
     stat_repair_loop().
-
-re_register_stat(Arg) ->
-    case (catch do_update(Arg)) of
-        {'EXIT', _} ->
-            Stats = stats_from_update_arg(Arg),
-            [try exometer:repair(Name) catch _:_ -> ok end || Name <- Stats];
-        ok ->
-            ok
-    end.
-
-select_names(Pat) ->
-    exometer:select([{ {Pat,'_','_'}, [], ['$name'] }]).
-
-%% Map from application argument used in call to `update/1' to
-%% folsom stat names and types.
-%% Updates that create dynamic stats must select all
-%% related stats.
-stats_from_update_arg({vnode_get, _, _}) ->
-    select_names([?PFX,?APP,vnode,gets|'_']);
-stats_from_update_arg({vnode_put, _, _}) ->
-    select_names([?PFX, ?APP, vnode, puts|'_']);
-stats_from_update_arg(vnode_index_refresh) ->
-    [[?PFX, ?APP, vnode, index, refreshes]];
-stats_from_update_arg(vnode_index_read) ->
-    [[?PFX, ?APP, vnode, index, reads]];
-stats_from_update_arg({vnode_index_write, _, _}) ->
-    P = ?PFX,
-    exometer:select(
-      [{ {[P, ?APP, vnode, index, writes|'_'] ,'_','_'}, [], ['$name'] },
-       { {[P, ?APP, vnode, index, deletes],'_','_'}, [], ['$name'] }]);
-stats_from_update_arg({vnode_index_delete, _}) ->
-    select_names([?PFX, ?APP, vnode, index, deletes|'_']);
-stats_from_update_arg({vnode_dt_update, Mod, _}) ->
-    Type = riak_kv_crdt:from_mod(Mod),
-    select_names([?PFX, ?APP, vnode, Type, update|'_']);
-stats_from_update_arg({riak_object_merge, undefined, _}) ->
-    select_names([?PFX, ?APP, object, merge|'_']);
-stats_from_update_arg({riak_object_merge, Mod, _}) ->
-    Type = riak_kv_crdt:from_mod(Mod),
-    select_names([?PFX, ?APP, object, Type, merge|'_']);
-stats_from_update_arg({get_fsm, Bucket, _, _, NumSib, ObjSz, _, undefined}) ->
-    P = ?PFX,
-    exometer:select(
-      [{ {[P,?APP,node,gets],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,time|'_'],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,Bucket],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,'_',Bucket|'_'],'_','_'},[],['$name'] }]
-      ++ [{ {[P,?APP,node,gets,siblings],'_','_'},[],['$name'] }
-	  || NumSib =/= undefined]
-      ++ [{ {[P,?APP,node,gets,objsize],'_','_'},[],['$name'] }
-	  || ObjSz =/= undefined]);
-stats_from_update_arg({get_fsm, Bucket, _, _, NumSib, ObjSz, _, Mod}) ->
-    P = ?PFX,
-    Type = riak_kv_crdt:from_mod(Mod),
-    exometer:select(
-      [{ {[P,?APP,node,gets,Type],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,Type,time|'_'],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,Bucket],'_','_'},[],['$name'] },
-       { {[P,?APP,node,gets,'_',Bucket|'_'],'_','_'},[],['$name'] }]
-      ++ [{ {[P,?APP,node,gets,Type,siblings],'_','_'},[],['$name'] }
-	  || NumSib =/= undefined]
-      ++ [{ {[P,?APP,node,gets,Type,objsize],'_','_'},[],['$name'] }
-	  || ObjSz =/= undefined]);
-stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
-    select_names([?PFX, ?APP, node, puts|'_']);
-stats_from_update_arg({read_repairs, _, _}) ->
-    select_names([?PFX, ?APP, node, gets, read_repairs|'_']);
-%% continue here
-stats_from_update_arg(coord_redir) ->
-    [[?PFX, ?APP, node, puts, coord_redirs]];
-stats_from_update_arg(mapper_start) ->
-    [[?PFX, ?APP, mapper_count]];
-stats_from_update_arg(mapper_end) ->
-    [[?PFX, ?APP, mapper_count]];
-stats_from_update_arg(precommit_fail) ->
-    [[?PFX, ?APP, precommit_fail]];
-stats_from_update_arg(postcommit_fail) ->
-    [[?PFX, ?APP, postcommit_fail]];
-stats_from_update_arg({fsm_spawned, Type}) ->
-    [[?PFX, ?APP, node, Type, fsm, active]];
-stats_from_update_arg({fsm_exit, Type}) ->
-    [[?PFX, ?APP, node, Type, fsm, active]];
-stats_from_update_arg({fsm_error, Type}) ->
-    stats_from_update_arg({fsm_exit, Type});
-stats_from_update_arg({index_create, _Pid}) ->
-    P = ?PFX,
-    [ [P, ?APP, index, fsm, create],
-      [P, ?APP, index, fsm, active] ];
-stats_from_update_arg(index_create_error) ->
-    [[?PFX, ?APP, index, fsm, create, error]];
-stats_from_update_arg({list_create, _Pid}) ->
-    P = ?PFX,
-    [ [P, ?APP, list, fsm, create],
-      [P, ?APP, list, fsm, active] ];
-stats_from_update_arg(list_create_error) ->
-    [[?PFX, ?APP, list, fsm, create, error]];
-stats_from_update_arg({consistent_get, _Bucket, _Microsecs, _Objsize}) ->
-    select_names([?PFX, ?APP, consistent, gets|'_']);
-stats_from_update_arg({consistent_put, _Bucket, _Microsecs, _ObjSize}) ->
-    select_names([?PFX, ?APP, consistent, puts|'_']);
-stats_from_update_arg(_) ->
-    [].
 
 -ifdef(TEST).
 -define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
@@ -751,7 +643,7 @@ start_exometer_test_env() ->
     ok = meck:new(riak_kv_vnode),
     ok = meck:expect(riak_core_stat, vnodeq_stats, fun() -> [] end),
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end).
-    
+
 stop_exometer_test_env() ->
     ok = exometer:stop(),
     ok = meck:unload(riak_kv_vnode),

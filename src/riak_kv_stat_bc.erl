@@ -155,8 +155,7 @@ produce_stats() ->
        ring_stats(),
        config_stats(),
        app_stats(),
-       memory_stats(),
-       yz_stat:search_stats()
+       memory_stats()
       ]).
 
 %% This is a temporary fix. We should be able to get these through exometer
@@ -649,7 +648,7 @@ bc_stat_val(StatName, Val) ->
 %% Leveldb stats are a last minute new edition to the blob
 level_stats() ->
     Stats = riak_core_stat_q:get_stats([riak_kv, vnode, backend, leveldb, read_block_error]),
-    [{join(lists:nthtail(3, tuple_to_list(Name))), Val} || {Name, Val} <- Stats].
+    [{join(lists:nthtail(3, Name)), Val} || {Name, Val} <- Stats].
 
 %% Read repair stats are a new edition to the legacy blob.
 %% Added to the blob since the stat query interface was not ready for the 1.3

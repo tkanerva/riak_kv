@@ -53,8 +53,10 @@ handle_event(Obj, #state{sockpid=SockPid}=State) ->
               _ ->
                   Msg0#rpbputresp{bucket=Bucket}
           end,
-    {ok, EncMsg} = riak_kv_pb_object:encode(Msg),
-    SockPid ! {send, EncMsg},
+    {ok, EncMsg0} = riak_kv_pb_object:encode(Msg),
+    EncMsg = iolist_to_binary(EncMsg0),
+    MsgSize = byte_size(EncMsg),
+    SockPid ! {send, <<MsgSize:32/big, EncMsg/binary>>},
     {ok, State}.
 
 handle_call(_Request, State) ->

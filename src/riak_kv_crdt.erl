@@ -349,7 +349,9 @@ new(B, K, Mod) ->
 to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
     to_binary(CRDT, ?V1_VERS);
 to_binary(?CRDT{mod=Mod, value=Value}) ->
-    CRDTBin = Mod:to_binary(Value),
+    %% Store the CRDT in the version that is negotiated cluster wide
+    Version = crdt_version(Mod),
+    CRDTBin = Mod:to_binary(Version, Value),
     Type = atom_to_binary(Mod, latin1),
     TypeLen = byte_size(Type),
     <<?TAG:8/integer, ?V2_VERS:8/integer, TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>.
@@ -386,10 +388,13 @@ v1_counter_from_binary(CounterBin) ->
             {error, {Class, Err}}
         end.
 
-%% @private attempt to deserialize a v2 CRDT.
+%% @private attempt to deserialize a v2 CRDT (That is a data type, not a 1.4 counter)
 crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
     try
         Mod = binary_to_existing_atom(Type, latin1),
+        %% You don't need a target version, as Mod:from_binary/1 will
+        %% always give you the highest version you can work with,
+        %% assuming Mod:to_binary/2 was called before storing.
         Val = Mod:from_binary(CRDTBin),
         to_record(Mod, Val) of
         ?CRDT{}=CRDT ->
@@ -414,6 +419,12 @@ to_record(?SET_TYPE, Val) ->
 %% @TODO what does this mean for Maps?
 supported(Mod) ->
     lists:member(Mod, riak_core_capability:get({riak_kv, crdt}, [])).
+
+%% @private get the binary version for a crdt mod, default to `1' for
+%% pre-versioned.
+-spec crdt_version(module()) -> pos_integer().
+crdt_version(Mod) ->
+    proplists:get_value(Mod, riak_core_capability:get({riak_kv, crdt_versions}, []), 1).
 
 %% @doc turn a string token / atom into a
 %% CRDT type

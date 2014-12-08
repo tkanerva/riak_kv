@@ -34,5 +34,7 @@
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
 
+-define(V2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}]).
+
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.

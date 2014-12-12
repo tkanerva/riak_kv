@@ -190,8 +190,8 @@ start(_Type, _StartArgs) ->
                                           []),
 
             riak_core_capability:register({riak_kv, crdt_versions},
-                                          [?V2_DATATYPE_VERSIONS, []],
-                                          []),
+                                          [?R1_DATATYPE_VERSIONS],
+                                          ?R1_DATATYPE_VERSIONS),
 
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
                                           [enabled, disabled],

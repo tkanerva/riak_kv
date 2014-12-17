@@ -50,7 +50,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, monitor_loop/1]).
+         terminate/2, code_change/3]).
 
 -record(state, {repair_mon, monitors}).
 
@@ -124,8 +124,8 @@ stop() ->
 init([]) ->
     register_stats(),
     Me = self(),
-    State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
-                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+    State = #state{monitors = [{index, riak_kv_stat_mon:spawn_link(index)},
+                               {list, riak_kv_stat_mon:spawn_link(list)}],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
@@ -301,15 +301,6 @@ do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
 
 add_monitor(Type, Pid) ->
     gen_server:cast(?SERVER, {monitor, Type, Pid}).
-
-monitor_loop(Type) ->
-    receive
-        {add_pid, Pid} ->
-            erlang:monitor(process, Pid);
-        {'DOWN', _Ref, process, _Pid, _Reason} ->
-            do_update({fsm_destroy, Type})
-    end,
-    monitor_loop(Type).
 
 %% Per index stats (by op)
 do_per_index(Op, Idx, USecs) ->

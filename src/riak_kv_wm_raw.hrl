@@ -24,6 +24,7 @@
 -define(MD_USERMETA, <<"X-Riak-Meta">>).
 -define(MD_INDEX,    <<"index">>).
 -define(MD_DELETED,  <<"X-Riak-Deleted">>).
+-define(MD_LI_IDX,   <<"composite-index">>).
 
 %% Names of HTTP header fields
 -define(HEAD_CTYPE,           "Content-Type").

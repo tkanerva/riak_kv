@@ -1233,11 +1233,17 @@ delete_hash(RObj) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
-            PutArgs=#putargs{bkey={Bucket, _Key},
+            PutArgs=#putargs{bkey={Bucket, Key},
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
                              starttime=StartTime}) ->
+
+    %% if this is a composite index write we need to change the key to be
+    %% the key we will actually write into leveldb
+    %% TODO this is super fugly - would prefer to fix the routing chash at the put_fsm level
+    NewK = maybe_rewrite_li_key(RObj, Key),
+
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
     %% no need to incur additional get. Otherwise, we need to read the
@@ -1253,9 +1259,9 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
+            {{true, ObjToStore}, PutArgs#putargs{bkey= {Bucket, NewK}, is_index = false}};
         false ->
-            prepare_put(State, PutArgs, IndexBackend)
+            prepare_put(State, PutArgs#putargs{bkey = {Bucket, NewK}}, IndexBackend)
     end.
 prepare_put(#state{vnodeid=VId,
                    mod=Mod,
@@ -1273,32 +1279,9 @@ prepare_put(#state{vnodeid=VId,
             IndexBackend) ->
     {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
 
-    RequiresGet =
-        case CacheClock of
-            undefined ->
-                true;
-            Clock ->
-                case vclock:descends(riak_object:vclock(RObj), Clock) of
-                    true ->
-                        false;
-                    _ ->
-                        true
-                end
-        end,
-    GetReply =
-        case RequiresGet of
-            true ->
-                case do_get_object(Bucket, Key, Mod, ModState) of
-                    {error, not_found, _UpdModState} ->
-                        ok;
-                    {ok, TheOldObj, _UpdModState} ->
-                        {ok, TheOldObj}
-                end;
-            false ->
-                FakeObj0 = riak_object:new(Bucket, Key, <<>>),
-                FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
-                {ok, FakeObj}
-        end,
+    RequiresGet = is_get_required(RObj, CacheClock),
+
+    GetReply = get_reply(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
     case GetReply of
         ok ->
             case IndexBackend of
@@ -1307,7 +1290,7 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+	    case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
                 {error, E} ->
                     {{fail, Idx, E}, PutArgs};
                 ObjToStore ->
@@ -1324,19 +1307,10 @@ prepare_put(#state{vnodeid=VId,
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
                                      true ->
-                                         case CacheData /= undefined andalso
-                                             RequiresGet == false of
-                                             true ->
-                                                 NewData = riak_object:index_data(AMObj),
-                                                 riak_object:diff_index_data(NewData,
-                                                                             CacheData);
-                                             false ->
-                                                 riak_object:diff_index_specs(AMObj,
-                                                                              OldObj)
-                                         end;
-                                    false ->
+					 merge_indices(CacheData, RequiresGet, AMObj, OldObj);
+				     false ->
                                          []
-                    end,
+				 end,
                     ObjToStore = case PruneTime of
                                      undefined ->
                                          AMObj;
@@ -1356,6 +1330,50 @@ prepare_put(#state{vnodeid=VId,
                     end
             end
     end.
+
+%% @private
+maybe_rewrite_li_key(RObj, Key) ->
+    case riak_object:is_li(RObj) of
+	true  -> riak_object:get_li_key(RObj);
+	false -> Key
+    end.
+
+%% @private
+merge_indices(CacheData, RequiresGet, AMObj, OldObj) ->
+    case CacheData /= undefined andalso
+	RequiresGet == false of
+	true ->
+	    NewData = riak_object:index_data(AMObj),
+	    riak_object:diff_index_data(NewData,
+					CacheData);
+	false ->
+	    riak_object:diff_index_specs(AMObj,
+					 OldObj)
+    end.
+
+%% @private
+is_get_required(_RObj, undefined) ->
+    true;
+is_get_required(RObj,  Clock) ->
+    case vclock:descends(riak_object:vclock(RObj), Clock) of
+	true -> false;
+	_    -> true
+    end.
+
+%% @private
+get_reply(true, Bucket, Key, Mod, ModState, _CacheClock) ->
+    %% io:format("in riak_kv_vnode:get_reply (1)~n- Bucket is ~p~n- Key is ~p~n Mod is ~p~n- ModState is ~p~n",
+    %% 	      [Bucket, Key, Mod, ModState]),
+    case do_get_object(Bucket, Key, Mod, ModState) of
+	{error, not_found, _UpdModState} ->
+	    ok;
+	{ok, TheOldObj, _UpdModState} ->
+	    {ok, TheOldObj}
+    end;
+get_reply(false, Bucket, Key, _Mod, _ModState, CacheClock) ->
+    FakeObj0 = riak_object:new(Bucket, Key, <<>>),
+    FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
+    {ok, FakeObj}.
 
 %% @doc in the case that this a co-ordinating put, prepare the object.
 prepare_new_put(true, RObj, VId, StartTime, undefined) ->

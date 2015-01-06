@@ -74,9 +74,9 @@ req(Bucket, ItemFilter, Query) ->
                           item_filter=ItemFilter,
                           qry=Query};
         false ->
-            #riak_kv_index_req_v1{bucket=Bucket,
-                                  item_filter=ItemFilter,
-                                  qry=Query}
+	    #riak_kv_index_req_v1{bucket=Bucket,
+				  item_filter=ItemFilter,
+				  qry=Query}
     end.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
@@ -90,6 +90,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+    io:format("in riak_kv_index:init Query is ~p~n", [Query]),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -110,14 +111,19 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
     {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}};
 plan(_CoverageVNodes, State) ->
+    % io:format("in riak_kv_index_fsm:plan (2)~n- CoverageVNodes is ~p~n", [CoverageVNodes]),
     {ok, State}.
 
 process_results(_VNode, {error, Reason}, _State) ->
+    io:format("in riak_kv_vnode:process_result (1) ~p~n", [Reason]),
     {error, Reason};
 process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, results_sent=Y})  when Y >= X ->
-    riak_kv_vnode:stop_fold(From),
+    io:format("in riak_kv_vnode:process_result (2)~n"),
+    Ret = riak_kv_vnode:stop_fold(From),
+    io:format("riak_kv_vnode:stop_fold returns ~p~n", [Ret]),
     {done, State};
 process_results(VNode, {From, Bucket, Results}, State) ->
+    io:format("in riak_kv_vnode:process_result (3)~n"),
     case process_results(VNode, {Bucket, Results}, State) of
         {ok, State2 = #state{pagination_sort=true}} ->
             #state{results_per_vnode=PerNode, max_results=MaxResults} = State2,
@@ -138,6 +144,7 @@ process_results(VNode, {From, Bucket, Results}, State) ->
             {done, State2}
     end;
 process_results(VNode, {_Bucket, Results}, State = #state{pagination_sort=true}) ->
+    io:format("in riak_kv_vnode:process_result (4)~n"),
     #state{merge_sort_buffer=MergeSortBuffer, results_per_vnode=PerNode,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
@@ -151,15 +158,18 @@ process_results(VNode, {_Bucket, Results}, State = #state{pagination_sort=true})
                            results_per_vnode=NewPerNode,
                            results_sent=ResultsSent+ResultsLen}};
 process_results(VNode, done, State = #state{pagination_sort=true}) ->
+    io:format("in riak_kv_vnode:process_result (5)~n"),
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
     BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),
     {done, State#state{merge_sort_buffer=BufferWithNewResults}};
 process_results(_VNode, {_Bucket, Results}, State) ->
+    io:format("in riak_kv_vnode:process_result (6)~n"),
     #state{from={raw, ReqId, ClientPid}} = State,
     send_results(ClientPid, ReqId, Results),
     {ok, State};
 process_results(_VNode, done, State) ->
+    io:format("in riak_kv_vnode:process_result (7)~n"),
     {done, State}.
 
 %% @private Update the buffer with results and process it

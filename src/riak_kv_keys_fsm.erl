@@ -78,6 +78,7 @@ req(Bucket, ItemFilter) ->
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
 init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
+    io:format("in riak_kv_keys_fsm:init~n"),
     riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
     ClientNode = atom_to_list(node(ClientPid)),
     PidStr = pid_to_list(ClientPid),
@@ -143,6 +144,10 @@ process_keys(_Bucket, Keys, ReqId, ClientPid) ->
     case use_ack_backpressure() of
         true ->
             Monitor = erlang:monitor(process, ClientPid),
+	    case Keys of
+		[] -> ok;
+		_  -> io:format("in riak_kv_keys_fsm:process_keys~n- Keys is ~p~n", [Keys])
+	    end,
             ClientPid ! {ReqId, {self(), Monitor}, {keys, Keys}},
             receive
                 {Monitor, ok} ->

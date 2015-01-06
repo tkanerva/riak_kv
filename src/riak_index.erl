@@ -345,6 +345,8 @@ apply_continuation(Q, C) ->
 %% @doc upgrade a query to the current latest version
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
+upgrade_query(Q=?KV_LI_INDEX_Q{}) ->
+    Q;
 upgrade_query(#riak_kv_index_v2{
                 start_key=StartKey,
                 filter_field=Field,
@@ -364,6 +366,7 @@ upgrade_query(#riak_kv_index_v2{
         end_inclusive=EndInclusive,
         return_body=ReturnBody};
 upgrade_query(Q) when is_tuple(Q) ->
+    io:format("trying to upgrade ~p~n", [Q]),
     {ok, Q2} = make_query(Q, ?KV_INDEX_Q{}),
     Q2.
 

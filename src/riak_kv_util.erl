@@ -25,7 +25,12 @@
 -module(riak_kv_util).
 
 
--export([is_x_deleted/1,
+-export([
+	 get_key_from_li_query/1,
+	 get_bucket_from_req/1,
+	 get_query_from_req/1,
+	 is_li_index_query/1,
+	 is_x_deleted/1,
          obj_not_deleted/1,
          try_cast/3,
          fallback/4,
@@ -49,6 +54,7 @@
          is_modfun_allowed/2]).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_kv_index.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -61,6 +67,21 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
+
+get_key_from_li_query(?KV_LI_INDEX_Q{key = K}) -> K.
+
+get_bucket_from_req(#riak_kv_index_req_v1{bucket = B}) -> B;
+get_bucket_from_req(#riak_kv_index_req_v2{bucket = B}) -> B.
+
+get_query_from_req(#riak_kv_index_req_v1{qry = Q}) -> Q;
+get_query_from_req(#riak_kv_index_req_v2{qry = Q}) -> Q.
+
+is_li_index_query(#riak_kv_index_req_v1{qry = Q}) -> is_li_i2(Q);
+is_li_index_query(#riak_kv_index_req_v2{qry = Q}) -> is_li_i2(Q);
+is_li_index_query(_)                              -> false.
+
+is_li_i2(?KV_LI_INDEX_Q{}) -> true;
+is_li_i2(_)                -> false.
 
 %% @spec is_x_deleted(riak_object:riak_object()) -> boolean()
 %% @doc 'true' if all contents of the input object are marked

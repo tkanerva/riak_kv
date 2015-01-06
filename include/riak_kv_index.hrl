@@ -45,4 +45,14 @@
           max_results :: integer() | undefined
          }).
 
--define(KV_INDEX_Q, #riak_kv_index_v3).
+-type filter() :: term().
+-type op()     :: [sum | average | count].
+
+-record(riak_kv_li_index_v1, {
+	  key            :: binary(),
+	  filter    = [] :: [filter()],
+	  operation = [] :: [op()]
+	 }).
+
+-define(KV_INDEX_Q,    #riak_kv_index_v3).
+-define(KV_LI_INDEX_Q, #riak_kv_li_index_v1).

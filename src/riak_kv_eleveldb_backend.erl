@@ -363,7 +363,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                          legacy_indexes=WriteLegacyIdx,
                                          ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
-    %% secondary index, or neither (fold across everything.)
+    %% secondary index, or relneither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
 
@@ -389,12 +389,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                            {break, BrkResult} ->
                                BrkResult
                        end,
-            case ExtraFold of
-                true ->
-                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-                false ->
-                    AccFinal
-            end
+		case ExtraFold of
+		    true ->
+			legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+		    false ->
+			AccFinal
+		end
         end,
     case lists:member(async_fold, Opts) of
         true ->

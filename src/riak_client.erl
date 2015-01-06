@@ -81,6 +81,7 @@ get(Bucket, Key, {?MODULE, [_Node, _ClientId]}=THIS) ->
     get(Bucket, Key, [], THIS).
 
 normal_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
+    io:format("in riak_client:normal_get with options~p~n", [Options]),
     Me = self(),
     ReqId = mk_reqid(),
     case node() of
@@ -141,6 +142,7 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
 get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    io:format("in riak_client:get/4 with options~n- ~p~n", [Options]),
     case consistent_object(Node, Bucket) of
         true ->
             consistent_get(Bucket, Key, Options, THIS);
@@ -274,6 +276,10 @@ consistent_put_type(RObj, Options) ->
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    io:format("in riak_client:put/3 Client is ~p~n", [THIS]),
+    io:format("- MetaData is ~p~n- Index Specs are ~p~n- Index Data is ~p~n", 
+     	      [dict:to_list(riak_object:get_metadata(RObj)), 
+	       riak_object:index_specs(RObj), riak_object:index_data(RObj)]),
     case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->
             consistent_put(RObj, Options, THIS);
@@ -496,6 +502,7 @@ list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
+    io:format("in riak_client:list_keys~n"),
     Timeout =
         case Timeout0 of
             T when is_integer(T) -> T;
@@ -703,6 +710,8 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Run the provided index query.
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
+    io:format("in get_index Bucket is ~p~n- Query is ~p~n- Opts is ~p~n Node is ~p~n",
+	      [Bucket, Query, Opts, Node]),
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
@@ -800,7 +809,8 @@ wait_for_reqid(ReqId, Timeout) ->
                     ok
             end,
             Response;
-        {ReqId, Response} -> Response
+        {ReqId, Response} -> % io:format("in riak_client:wait_for_reqid ~p~n- Response is ~p", [ReqId, Response]),
+			     Response
     after Timeout ->
             {error, timeout}
     end.

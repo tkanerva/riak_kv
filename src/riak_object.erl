@@ -35,6 +35,7 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
+-type li_index() :: {key(), [{binary(), index_value()}]}.
 
 -record(r_content, {
           metadata :: dict() | list(),
@@ -91,6 +92,7 @@
 -export([is_robject/1]).
 -export([update_last_modified/1]).
 -export([strict_descendant/2]).
+-export([make_li_index/3, get_li_index/1, is_li/1, get_li_key/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -206,6 +208,49 @@ reconcile(Objects, AllowMultiple) ->
         true ->
             RObj
     end.
+
+%% @doc Creates a composite index object which can be added to the
+%%      meta data of a riak_object to the index
+-spec make_li_index(key(), binary(), [{binary(), binary()}]) -> li_index().
+make_li_index(Key, Groupby, Indices) when is_binary(Groupby) 
+					  andalso is_list(Indices) ->
+    Indices0 = lists:umerge([{Groupby, Key}], lists:sort(Indices)),
+    WritingKey = make_li_master_key(Key, Indices),
+    {WritingKey, Indices0}.
+
+%% @doc get the composite index from a riak_object
+-spec get_li_index(riak_object()) -> li_index().
+get_li_index(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    case dict:find(?MD_LI_IDX, MetaData) of
+	{ok, LI} -> LI;
+	error    -> 'fix me ya bas!'
+    end.
+
+%% @doc checks if the object has a composite index in it
+-spec is_li(riak_object()) -> boolean().
+is_li(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    dict:is_key(?MD_LI_IDX, MetaData).    
+
+%% @doc gets the Local Index key
+%% TODO return error or crash?
+-spec get_li_key(riak_object()) -> key().
+get_li_key(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    _Key = dict:fetch(?MD_LI_IDX, MetaData).
+
+%% @private makes the actual leveldb key from the Local Index composite Key
+make_li_master_key(Groupby, Indices) ->
+    {_, Components} = lists:unzip(lists:sort(Indices)),
+    % TODO fix up see https://bashoeng.atlassian.net/browse/RTS-71
+    % sect:encode([Groupby | Components]).
+    make_bin(lists:reverse([Groupby | Components]), <<>>).
+
+make_bin([], Acc) ->
+    Acc;
+make_bin([H | T], Acc) ->
+    make_bin(T, <<H/binary, Acc/binary>>).
 
 %% @private remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /

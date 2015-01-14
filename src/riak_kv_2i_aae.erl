@@ -502,11 +502,11 @@ do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
     lager:debug("Updating the temporary 2i AAE tree"),
     TmpTree = hashtree:update_tree(TmpTree0),
     Remote =
-    fun(get_bucket, {L, B}) ->
+    fun(get_bucket, {L, B, all}) ->
             R1 = riak_kv_index_hashtree:exchange_bucket(IndexN2i, L, B,
                                                         TreePid),
             R1;
-       (key_hashes, Segment) ->
+       (key_hashes, {Segment, all}) ->
             R2 = riak_kv_index_hashtree:exchange_segment(IndexN2i, Segment,
                                                          TreePid),
             R2;

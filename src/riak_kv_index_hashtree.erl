@@ -42,7 +42,9 @@
          compare/5,
          determine_data_root/0,
          exchange_bucket/4,
+         exchange_bucket/5,
          exchange_segment/3,
+         exchange_segment/4,
          estimate_keys/1,
          estimate_keys/2,
          hash_index_data/1,
@@ -77,7 +79,8 @@
                 path,
                 build_time,
                 trees,
-                use_2i = false :: boolean()}).
+                use_2i = false :: boolean(),
+                hashtree_tag_fun :: fun( (any()) -> term() )}).
 
 -type state() :: #state{}.
 
@@ -149,13 +152,25 @@ update(Id, Tree) ->
 %%      that is managed by the provided index_hashtree.
 -spec exchange_bucket(index_n(), integer(), integer(), pid()) -> orddict().
 exchange_bucket(Id, Level, Bucket, Tree) ->
-    gen_server:call(Tree, {exchange_bucket, Id, Level, Bucket}, infinity).
+    gen_server:call(Tree, {exchange_bucket, Id, Level, Bucket, all}, infinity).
+
+%% @doc Return a hash bucket from the tree identified by the given tree id
+%%      that is managed by the provided index_hashtree.
+-spec exchange_bucket(index_n(), integer(), integer(), pid(), hashtree:tag()) -> orddict().
+exchange_bucket(Id, Level, Bucket, Tree, Tag) ->
+    gen_server:call(Tree, {exchange_bucket, Id, Level, Bucket, Tag}, infinity).
 
 %% @doc Return a segment from the tree identified by the given tree id that
 %%      is managed by the provided index_hashtree.
 -spec exchange_segment(index_n(), integer(), pid()) -> orddict().
 exchange_segment(Id, Segment, Tree) ->
-    gen_server:call(Tree, {exchange_segment, Id, Segment}, infinity).
+    gen_server:call(Tree, {exchange_segment, Id, Segment, all}, infinity).
+
+%% @doc Return a segment from the tree identified by the given tree id that
+%%      is managed by the provided index_hashtree.
+-spec exchange_segment(index_n(), integer(), pid(), hashtree:tag()) -> orddict().
+exchange_segment(Id, Segment, Tree, Tag) ->
+    gen_server:call(Tree, {exchange_segment, Id, Segment, Tag}, infinity).
 
 %% @doc Start the key exchange between a given tree managed by the
 %%      provided index_hashtree and a remote tree accessed through the
@@ -245,12 +260,15 @@ init([Index, VNPid, Opts]) ->
             monitor(process, VNPid),
             Use2i = lists:member(use_2i, Opts),
             VNEmpty = lists:member(vnode_empty, Opts),
+            TagFun = proplists:get_value(tag_fun, Opts, fun(_BK) -> [] end),
+            BinTagFun = fun(BinBK) -> TagFun(binbkey_to_bk(BinBK)) end,
             State = #state{index=Index,
                            vnode_pid=VNPid,
                            trees=orddict:new(),
                            built=false,
                            use_2i=Use2i,
-                           path=Path},
+                           path=Path,
+                           hashtree_tag_fun=BinTagFun },
             IndexNs = responsible_preflists(State),
             State2 = init_trees(IndexNs, State),
             %% If vnode is empty, mark tree as built without performing fold
@@ -293,18 +311,18 @@ handle_call({update_tree, Id}, From, State) ->
                end,
                State);
 
-handle_call({exchange_bucket, Id, Level, Bucket}, _From, State) ->
+handle_call({exchange_bucket, Id, Level, Bucket, Tag}, _From, State) ->
     apply_tree(Id,
                fun(Tree) ->
-                       Result = hashtree:get_bucket(Level, Bucket, Tree),
+                       Result = hashtree:get_bucket(Level, Bucket, Tree, Tag),
                        {Result, Tree}
                end,
                State);
 
-handle_call({exchange_segment, Id, Segment}, _From, State) ->
+handle_call({exchange_segment, Id, Segment, Tag}, _From, State) ->
     apply_tree(Id,
                fun(Tree) ->
-                       [{_, Result}] = hashtree:key_hashes(Tree, Segment),
+                       [{_, Result}] = hashtree:key_hashes(Tree, Segment, Tag),
                        {Result, Tree}
                end,
                State);
@@ -552,14 +570,14 @@ index_2i_n() ->
 %% tree. In other words, all hashtrees for a given index_hashtree are stored in
 %% the same on-disk store.
 -spec do_new_tree(index_n(), state()) -> state().
-do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
+do_new_tree(Id, State=#state{trees=Trees, path=Path, hashtree_tag_fun=HashTreeTagFun }) ->
     Index = State#state.index,
     IdBin = tree_id(Id),
     NewTree = case Trees of
                   [] ->
-                      hashtree:new({Index,IdBin}, [{segment_path, Path}]);
+                      hashtree:new({Index,IdBin}, [{segment_path, Path}, {tag_fun, HashTreeTagFun}]);
                   [{_,Other}|_] ->
-                      hashtree:new({Index,IdBin}, Other)
+                      hashtree:new({Index,IdBin}, Other, [{tag_fun, HashTreeTagFun}])
               end,
     Trees2 = orddict:store(Id, NewTree, Trees),
     State#state{trees=Trees2}.
@@ -668,6 +686,10 @@ expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
     end;
 expand_item(_, Item, Others) ->
     [Item | Others].
+
+-spec binbkey_to_bk( binary()) -> { binary(), binary() }.
+binbkey_to_bk(BinBKey) ->
+    binary_to_term(BinBKey).
 
 -spec do_insert_expanded([{index_n(), binary(), binary()}], proplist(),
                          state()) -> state().

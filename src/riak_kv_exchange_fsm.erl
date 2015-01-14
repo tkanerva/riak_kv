@@ -185,10 +185,10 @@ key_exchange(timeout, State=#state{local=LocalVN,
                                            [TmpDir, NA, NB, NC])),
     LogFile2 = lists:flatten(io_lib:format("~s/out.~p.~p.~p",
                                            [TmpDir, NA, NB, NC])),
-    Remote = fun(get_bucket, {L, B}) ->
-                     exchange_bucket(RemoteTree, IndexN, L, B);
-                (key_hashes, Segment) ->
-                     exchange_segment(RemoteTree, IndexN, Segment);
+    Remote = fun(get_bucket, {L, B, Tag}) ->
+                     exchange_bucket(RemoteTree, IndexN, L, B, Tag);
+                (key_hashes, {Segment, Tag}) ->
+                     exchange_segment(RemoteTree, IndexN, Segment, Tag);
                 (init, _Y) ->
                      %% Our return value is ignored, so we can't return
                      %% the disk log handle here.  However, disk_log is
@@ -200,9 +200,9 @@ key_exchange(timeout, State=#state{local=LocalVN,
                      ok = disk_log:sync(Now),
                      ok = disk_log:close(Now),
                      ok;
-                (start_exchange_level, {_Level, _Buckets}) ->
+                (start_exchange_level, {_Level, _Buckets, _Tag}) ->
                      ok;
-                (start_exchange_segments, _Segments) ->
+                (start_exchange_segments, {_Segments, _Tag}) ->
                      ok;
                 (_X, _Y) ->
                      lager:error("~s LINE ~p: ~p ~p", [?MODULE, ?LINE, _X, _Y]),
@@ -274,12 +274,12 @@ key_exchange(timeout, State=#state{local=LocalVN,
 %%%===================================================================
 
 %% @private
-exchange_bucket(Tree, IndexN, Level, Bucket) ->
-    riak_kv_index_hashtree:exchange_bucket(IndexN, Level, Bucket, Tree).
+exchange_bucket(Tree, IndexN, Level, Bucket, Tag) ->
+    riak_kv_index_hashtree:exchange_bucket(IndexN, Level, Bucket, Tree, Tag).
 
 %% @private
-exchange_segment(Tree, IndexN, Segment) ->
-    riak_kv_index_hashtree:exchange_segment(IndexN, Segment, Tree).
+exchange_segment(Tree, IndexN, Segment, Tag) ->
+    riak_kv_index_hashtree:exchange_segment(IndexN, Segment, Tree, Tag).
 
 %% @private
 read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->

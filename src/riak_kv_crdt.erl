@@ -66,15 +66,46 @@
 %%
 %% @see merge/1
 -spec update(riak_object:riak_object(), riak_dt:actor(), riak_dt:operation()) ->
-                    riak_object:riak_object() | precondition_error().
+                    {Store::riak_object:riak_object(),
+                     Delta::riak_object:riak_object()} |
+                    precondition_error().
 update(RObj, Actor, Operation) ->
     {CRDTs0, Siblings} = merge_object(RObj),
     case update_crdt(CRDTs0, Actor, Operation) of
         {error, _}=E ->
             E;
         CRDTs ->
-            update_object(RObj, CRDTs, Siblings)
+            StoreObj = update_object(RObj, CRDTs, Siblings),
+            DeltaObj = delta_object(StoreObj,
+                                    CRDTs,
+                                   Actor),
+            {ok, {StoreObj, DeltaObj}}
     end.
+
+-spec delta_object(riak_object:riak_object(),
+                   [?CRDT{}], binary()) ->
+                          riak_object:riak_object().
+delta_object(StoreObj, CRDTs, _Actor) ->
+    Bucket = riak_object:bucket(StoreObj),
+    Key = riak_object:key(StoreObj),
+    %% Clock = riak_object:vclock(StoreObj),
+    %% {ok, Dot} = vclock:get_dot(Actor, Clock),
+    maybe_log_sibling_crdts(Bucket, Key, CRDTs),
+    Contents = [{meta(Meta, CRDT), binary_delta(CRDT)} ||
+        {_Mod, {Meta, CRDT}} <- orddict:to_list(CRDTs)],
+    O = riak_object:new(Bucket, Key, <<>>),
+    %% what kind of clock do we need?
+    %% Seems we should have just the dot, and an empty clock
+    %% like a delta. What does that mean for riak_object?
+    riak_object:set_contents(O, Contents).
+
+%% dot_it(Meta, Dot) ->
+%%     dict:store(?DOT, Dot, Meta).
+
+%% @private @TODO(rdb) this is a very dirty hack to get the delta into
+%% a binary format for shipping
+binary_delta(CRDT=?CRDT{delta=Delta}) ->
+    to_binary(CRDT?CRDT{value=Delta}).
 
 %% @doc Merge all sibling values that are CRDTs into a single value
 %% for that CRDT type.  NOTE: handles sibling types. For example if
@@ -263,31 +294,20 @@ update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     CounterOp = counter_op(Amt),
     Op = ?CRDT_OP{mod=?V1_COUNTER_TYPE, op=CounterOp},
     update_crdt(Dict, Actor, Op);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
-    case Mod:update(Op, Actor, Value) of
-        {ok, NewVal} ->
-            orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
-        {error, _}=E -> E
-    end;
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TYPE;
-                                                                    Mod==?SET_TYPE->
-    case orddict:find(Mod, Dict) of
-        error ->
-            %% No local replica of this CRDT, apply the ops to a new
-            %% instance
-            case update_crdt(Mod, Ops, Actor, Mod:new(), OpCtx) of
-                {ok, InitialVal} ->
-                    orddict:store(Mod, {undefined, to_record(Mod, InitialVal)}, Dict);
-                E ->
-                    E
-            end;
-        {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
-            case update_crdt(Mod, Ops, Actor, LocalReplica, OpCtx) of
-                {error, _}=E -> E;
-                {ok, NewVal} ->
-                    orddict:store(Mod, {Meta, LocalCRDT?CRDT{value=NewVal}}, Dict)
-            end
+    case update_crdt(Mod, Ops, Actor, Value, OpCtx) of
+        {ok, Delta} ->
+            %% merge to local, store local, return delta
+            Updated = Mod:merge(Delta, Value),
+            %% Actually create a full crdt for replication. not a
+            %% delta. Why? So that the downstream can store straight
+            %% to disk if it has no local value. To do this simply
+            %% merge the delta with bottom for the crdt.
+            DPlusB = Mod:merge(Mod:new(), Delta),
+            orddict:store(Mod, {Meta, Record?CRDT{value=Updated, delta=DPlusB}}, Dict);
+        {error, _}=E ->
+            E
     end.
 
 %% @private call update/3 or update/4 depending on context value
@@ -295,10 +315,10 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TY
                   undefined | riak_dt_vclock:vclock()) ->
                          term().
 update_crdt(Mod, Ops, Actor, CRDT, undefined) ->
-    Mod:update(Ops, Actor, CRDT);
+    Mod:delta_update(Ops, Actor, CRDT);
 update_crdt(Mod, Ops, Actor, CRDT, Ctx0) ->
     Ctx = get_context(Ctx0),
-    Mod:update(Ops, Actor, CRDT, Ctx).
+    Mod:delta_update(Ops, Actor, CRDT, Ctx).
 
 -spec get_context(undefined | binary()) -> riak_dt_vclock:vclock().
 get_context(undefined) ->
@@ -324,7 +344,8 @@ fetch_with_default(Mod, Dict) ->
 %% is a new crdt.
 update_object(RObj, CRDTs, SiblingValues) ->
     %% keep non-counter siblings, too
-    CRDTSiblings = [{meta(Meta, CRDT), to_binary(CRDT)} || {_Mod, {Meta, CRDT}} <- orddict:to_list(CRDTs)],
+    CRDTSiblings = [{meta(Meta, CRDT), to_binary(CRDT)} ||
+                       {_Mod, {Meta, CRDT}} <- orddict:to_list(CRDTs)],
     riak_object:set_contents(RObj, CRDTSiblings ++ SiblingValues).
 
 meta(undefined, ?CRDT{ctype=CType}) ->

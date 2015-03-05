@@ -581,6 +581,13 @@ waiting_local_vnode(Result, StateData = #state{putcore = PutCore,
             ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [2],
                     [integer_to_list(Idx)]),
             execute_remote(StateData#state{robj = PutObj, putcore = UpdPutCore1});
+        {dw, Idx, _StoreRetObj, DeltaObj, _ReqId} ->
+            %% Return body, coord put with crdt? One object for the
+            %% returnbody/put core/ And one to be replicated (a delta
+            %% crdt)
+            ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [2],
+                    [integer_to_list(Idx)]),
+            execute_remote(StateData#state{robj = DeltaObj, putcore = UpdPutCore1});
         {dw, Idx, _ReqId} ->
             %% Write succeeded without changes to vclock required and returnbody false
             ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [2],
@@ -779,6 +786,7 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
             ?DTRACE(Trace, ?C_PUT_FSM_PROCESS_REPLY, [0], []),
             new_state_timeout(postcommit, StateData2);
         {ok, _} ->
+            %% @TODO(rdb) this will be inaccurate for delta CRDTs
             Values = riak_object:get_values(RObj),
             %% TODO: more accurate sizing method
             case Trace of

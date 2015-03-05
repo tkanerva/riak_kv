@@ -62,7 +62,8 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
-          updatevalue :: term()
+          updatevalue :: term(),
+          is_crdt = false :: boolean()
          }).
 -opaque riak_object() :: #r_object{}.
 
@@ -196,6 +197,7 @@ ancestors(Objects) ->
 -spec strict_descendant(riak_object(), riak_object()) -> boolean().
 strict_descendant(O1, O2) ->
     vclock:dominates(riak_object:vclock(O1), riak_object:vclock(O2)).
+
 
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
@@ -797,12 +799,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;

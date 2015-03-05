@@ -1506,11 +1506,22 @@ prepare_put(State=#state{mod=Mod,
                 false ->
                     IndexSpecs = []
             end,
+
             %% local not found, start a per key epoch
             {EpochId, State2} = new_key_epoch(State),
+            %% @TODO(rdb) here we _don't_ want to store the delta of a
+            %% CRDT, do we? We want to store the merge of the delta to
+            %% new() (Dealt with in riak_kv_crdt!)
             case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
                 {error, E} ->
                     {{fail, Idx, E}, PutArgs, State2};
+                %% @TODO(rdb) @HACK for delta PoC
+                {ok, {Store, DeltaReplicate}} ->
+                            {{true, Store, DeltaReplicate},
+                             %% I think we can not do this, since CRDT
+                             %% don't have indexes
+                             PutArgs#putargs{index_specs=IndexSpecs,
+                                             is_index=IndexBackend}, State2};
                 ObjToStore ->
                     {{true, ObjToStore},
                      PutArgs#putargs{index_specs=IndexSpecs,
@@ -1547,7 +1558,13 @@ prepare_put(State=#state{mod=Mod,
                     case handle_crdt(Coord, CRDTOp, ActorId, ObjToStore) of
                         {error, E} ->
                             {{fail, Idx, E}, PutArgs, State2};
-                        ObjToStore2 ->
+                        {ok, {Store, DeltaReplicate}} ->
+                            {{true, Store, DeltaReplicate},
+                             %% I think we can not do this, since CRDT
+                             %% don't have indexes
+                             PutArgs#putargs{index_specs=IndexSpecs,
+                                             is_index=IndexBackend}, State2};
+                        {ok, ObjToStore2} ->
                             {{true, ObjToStore2},
                              PutArgs#putargs{index_specs=IndexSpecs,
                                              is_index=IndexBackend}, State2}
@@ -1570,13 +1587,24 @@ prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     %% us in the clock? If so, mark as dirty
     RObj.
 
+-spec handle_crdt(Coord :: boolean(),
+                  Op :: #crdt_op{},
+                  ActorId :: binary(),
+                  Obj :: riak_object:riak_object()) ->
+                         riak_object:riak_object() |
+                         {ToStore :: riak_object:riak_object(),
+                          DeltaObject :: riak_object:riak_object()}.
 handle_crdt(_, undefined, _VId, RObj) ->
-    RObj;
+    {ok, RObj};
 handle_crdt(true, CRDTOp, VId, RObj) ->
     do_crdt_update(RObj, VId, CRDTOp);
 handle_crdt(false, _CRDTOp, _Vid, RObj) ->
-    RObj.
+    {ok, RObj}.
 
+-spec do_crdt_update(riak_object:riak_object(), binary(), #crdt_op{}) ->
+                            {ToStore :: riak_object:riak_object(),
+                             DeltaObject :: riak_object:riak_object()} |
+                            {error, term()}.
 do_crdt_update(RObj, VId, CRDTOp) ->
     {Time, Value} = timer:tc(riak_kv_crdt, update, [RObj, VId, CRDTOp]),
     ok = riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
@@ -1605,7 +1633,29 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+    {Reply, State2};
+%% @TODO(rdb) Janky hack for PoC delta-mutation. Only a coord put that
+%% is a crdt_op will generate a three tuple of `{true, StoreObject,
+%% ReplicateDeltaObject}'
+perform_put({true, StoreObj, RepObj},
+            State,
+            #putargs{returnbody=RB,
+                     bkey=BKey,
+                     reqid=ReqID,
+                     index_specs=IndexSpecs}) ->
+    {StoreReply, State2} = actual_put(BKey, StoreObj, IndexSpecs, RB, ReqID, State),
+    %% @TODO(rdb) janky hack to PoC delta mutation of CRDTs
+    Reply = case StoreReply of
+                {dw, Idx, StoreObj, ReqID} ->
+                    %% RB true, isn't this _always_ the case for
+                    %% coord? Which is the only time there will be a
+                    %% delta
+                    {dw, Idx, StoreObj, RepObj, ReqID};
+                _ ->
+                    StoreReply
+            end,
     {Reply, State2}.
+
 
 actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,
@@ -1682,6 +1732,21 @@ select_newest_content(Mult) ->
          end,
          Mult)).
 
+%% @private @HACK @TODO(rdb) pass this in, or some more efficient
+%% check
+is_crdt(Obj) ->
+    Bucket = riak_object:bucket(Obj),
+    case riak_core_bucket:get_bucket(Bucket) of
+        BProps when is_list(BProps) ->
+            DataType = proplists:get_value(datatype, BProps),
+            AllowMult = proplists:get_value(allow_mult, BProps),
+            Mod = riak_kv_crdt:to_mod(DataType),
+            Supported = riak_kv_crdt:supported(Mod),
+            AllowMult andalso Supported;
+        {error, no_type} ->
+            false
+    end.
+
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
@@ -1690,14 +1755,20 @@ put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
-    %% a downstream merge, or replication of a coordinated PUT
-    %% Merge the value received with local replica value
-    %% and store the value IFF it is different to what we already have
-    %%
-    %% @TODO Check the clock of the incoming object, if it is more advanced
-    %% for our actor than we are then something is amiss, and we need
-    %% to mark the actor as dirty for this key
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    %% a downstream merge, or replication of a coordinated PUT Merge
+    %% the value received with local replica value and store the value
+    %% IFF it is different to what we already have
+    %% @TODO(rdb) @HACK
+    %% use bucket props to decide if this is a CRDT, if it is, force a
+    %% merge as we might have a delta
+    ResObj = case is_crdt(UpdObj) of
+                 true ->
+                     %% This is bad, we'll be merging more than we need to,
+                     %% even things we've seen already!
+                     riak_object:merge(CurObj, UpdObj);
+                 false ->
+                     riak_object:syntactic_merge(CurObj, UpdObj)
+             end,
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};

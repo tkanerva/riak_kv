@@ -35,7 +35,7 @@
 
 -module(riak_kv_pncounter).
 
--export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
+-export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1, delta_update/3]).
 
 %% EQC API
 -ifdef(EQC).
@@ -94,6 +94,13 @@ update(decrement, Actor, {Incr, Decr}) ->
 update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
     {ok, GC} = riak_kv_gcounter:update({increment, By}, Actor, Decr),
     {ok, {Incr, GC}}.
+
+-spec delta_update(pncounter_op(), term(), pncounter()) -> {ok, pncounter()}.
+delta_update(Op, Actor, Cntr0) ->
+    {ok, {P, N}} = update(Op, Actor, Cntr0),
+    DeltaP = riak_kv_gcounter:fragment(Actor, P),
+    DeltaN = riak_kv_gcounter:fragment(Actor, N),
+    {ok, {DeltaP, DeltaN}}.
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.

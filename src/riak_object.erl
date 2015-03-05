@@ -56,7 +56,8 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
-          updatevalue :: term()
+          updatevalue :: term(),
+          is_crdt = false :: boolean()
          }).
 -opaque riak_object() :: #r_object{}.
 
@@ -189,6 +190,7 @@ ancestors(Objects) ->
 -spec strict_descendant(riak_object(), riak_object()) -> boolean().
 strict_descendant(O1, O2) ->
     vclock:dominates(riak_object:vclock(O1), riak_object:vclock(O2)).
+
 
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
@@ -613,7 +615,7 @@ update_metadata(Object=#r_object{}, M) ->
 -spec update_value(riak_object(), value()) -> riak_object().
 update_value(Object=#r_object{}, V) -> Object#r_object{updatevalue=V}.
 
-%% @doc  Return the updated metadata of this riak_object.
+%% @doc Return the updated metadata of this riak_object.
 -spec get_update_metadata(riak_object()) -> dict().
 get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 

@@ -86,11 +86,15 @@ add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
 add_result({dw, Idx, _ReqId}, PutCore = #putcore{results = Results,
                                                  num_dw = NumDW}) ->
     num_pw(PutCore#putcore{results = [{Idx, {dw, undefined}} | Results],
-                    num_dw = NumDW + 1}, Idx);
+                           num_dw = NumDW + 1}, Idx);
 add_result({dw, Idx, ResObj, _ReqId}, PutCore = #putcore{results = Results,
                                                          num_dw = NumDW}) ->
     num_pw(PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
-                    num_dw = NumDW + 1}, Idx);
+                           num_dw = NumDW + 1}, Idx);
+add_result({dw, Idx, ResObj, _DeltaObj, _ReqId}, PutCore = #putcore{results = Results,
+                                                                    num_dw = NumDW}) ->
+    num_pw(PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
+                           num_dw = NumDW + 1}, Idx);
 add_result({fail, Idx, _ReqId}, PutCore = #putcore{results = Results,
                                                    num_fail = NumFail}) ->
     PutCore#putcore{results = [{Idx, {error, undefined}} | Results],

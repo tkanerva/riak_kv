@@ -296,10 +296,10 @@ update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     update_crdt(Dict, Actor, Op);
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
-    case update_crdt(Mod, Ops, Actor, Value, OpCtx) of
-        {ok, Delta} ->
+    Updt = update_crdt(Mod, Ops, Actor, Value, OpCtx),
+    case Updt of
+        {ok, {Updated, Delta}} ->
             %% merge to local, store local, return delta
-            Updated = Mod:merge(Delta, Value),
             %% Actually create a full crdt for replication. not a
             %% delta. Why? So that the downstream can store straight
             %% to disk if it has no local value. To do this simply

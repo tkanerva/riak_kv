@@ -31,8 +31,6 @@
 
 -record(rec, {
     w, pw,
-    start_ts,
-    size,
     primaries = 0,
     total = 0,
     from
@@ -103,9 +101,7 @@ put(RObj, Options) ->
     % EncodedVal = riak_object:to_binary(v0, RObj4),
     EncodedVal = riak_object:to_binary(v1, RObj4),
     gen_server:cast(Worker,
-        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self(),
-                                                             start_ts=StartTS,
-                                                             size=size(EncodedVal)}}
+        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
     ),
     Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
         N when is_integer(N) andalso N > 0 ->
@@ -167,9 +163,7 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
             #rec{
                 pw = PW, w = W,
                 primaries = Primaries, total = Total,
-                from = From,
-                start_ts = StartTS,
-                size = Size
+                from = From
             } = Rec,
             NewPrimaries = case Type of
                                primary ->
@@ -182,8 +176,7 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
                 true ->
                     reply(From, ReqId, ok),
                     {_, S} = erase_request_record(ReqId, State),
-                    Usecs = timer:now_diff(os:timestamp(), StartTS),
-                    riak_kv_stat:update({writeonce_put, Usecs, Size}),
+                    riak_kv_stat:update(node_writeonce_put),
                     S;
                 false ->
                     {_, S} = store_request_record(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),

@@ -762,11 +762,10 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
-handle_command({ts_put, Bucket, Key, EncodedVal, Type}, From, State=#state{idx=Idx, mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
-    StartTS = os:timestamp(),
+handle_command({ts_put, Bucket, Key, EncodedVal, Type}, From, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     case AsyncPut of
         true ->
-            Context = {ts_reply, From, Type, Bucket, Key, EncodedVal, StartTS},
+            Context = {ts_reply, From, Type, Bucket, Key, EncodedVal},
             {_Reply, ModState2} =
                 case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
                     {ok, UpModState} ->
@@ -785,7 +784,7 @@ handle_command({ts_put, Bucket, Key, EncodedVal, Type}, From, State=#state{idx=I
                         {{error, Reason}, UpModState}
                 end,
             riak_core_vnode:reply(From, {ts_reply, Reply, Type}),
-            update_vnode_stats(vnode_put, Idx, StartTS)
+            riak_kv_stat:update(vnode_writeonce_put)
     end,
     {noreply, State#state{modstate=ModState2}}.
 
@@ -1103,11 +1102,10 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({{ts_reply, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx}) ->
+handle_info({{ts_reply, From, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
     riak_core_vnode:reply(From, {ts_reply, Reply, Type}),
-    update_vnode_stats(vnode_put, Idx, StartTS),
+    riak_kv_stat:update(vnode_writeonce_put),
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->

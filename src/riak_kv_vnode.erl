@@ -2088,8 +2088,9 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
 %% @private
 -spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
                                 ok.
-update_vnode_stats(Op, Idx, StartTS) ->
-    ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
+update_vnode_stats(_Op, _Idx, StartTS) ->
+    _Usecs = timer:now_diff(os:timestamp(), StartTS).
+%%    ok = riak_kv_stat:update({Op, Idx, Usecs}).
 
 %% @private
 update_index_write_stats(false, _IndexSpecs) ->

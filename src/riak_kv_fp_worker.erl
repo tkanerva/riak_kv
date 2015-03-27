@@ -169,7 +169,7 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
                 primaries = Primaries, total = Total,
                 from = From,
                 start_ts = StartTS,
-                size = Size
+                size = _Size
             } = Rec,
             NewPrimaries = case Type of
                                primary ->
@@ -182,8 +182,8 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
                 true ->
                     reply(From, ReqId, ok),
                     {_, S} = erase_request_record(ReqId, State),
-                    Usecs = timer:now_diff(os:timestamp(), StartTS),
-                    riak_kv_stat:update({writeonce_put, Usecs, Size}),
+                    _Usecs = timer:now_diff(os:timestamp(), StartTS),
+                    %%riak_kv_stat:update({writeonce_put, Usecs, Size}),
                     S;
                 false ->
                     {_, S} = store_request_record(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),

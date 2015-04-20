@@ -2,7 +2,7 @@
 %%
 %% riak_buckets_fsm: listing of buckets
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -32,16 +32,12 @@
          process_results/2,
          finish/2]).
 
+-include_lib("otp_compat/include/otp_compat.hrl").
+
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--ifdef(namespaced_types).
--type riak_kv_buckets_fsm_set() :: sets:set().
--else.
--type riak_kv_buckets_fsm_set() :: set().
--endif.
-
--record(state, {buckets=sets:new() :: riak_kv_buckets_fsm_set(),
+-record(state, {buckets=sets:new() :: set_t(),
                 from :: from(),
                 stream=false :: boolean(),
                 type :: binary()

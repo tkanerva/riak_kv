@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_utils: Common functions used by riak_kv_wm_* modules.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -46,13 +46,8 @@
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
+-include_lib("otp_compat/include/otp_compat.hrl").
 -include("riak_kv_wm_raw.hrl").
-
--ifdef(namespaced_types).
--type riak_kv_wm_utils_dict() :: dict:dict().
--else.
--type riak_kv_wm_utils_dict() :: dict().
--endif.
 
 -type jsonpropvalue() :: integer()|string()|boolean()|{struct,[jsonmodfun()]}.
 -type jsonmodfun() :: {ModBinary :: term(), binary()}|{FunBinary :: term(), binary()}.
@@ -105,7 +100,7 @@ default_encodings() ->
     [{"identity", fun(X) -> X end},
      {"gzip", fun(X) -> zlib:gzip(X) end}].
 
--spec multipart_encode_body(string(), binary(), {riak_kv_wm_utils_dict(), binary()}, term()) ->
+-spec multipart_encode_body(string(), binary(), {dict_t(), binary()}, term()) ->
     iolist().
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
@@ -206,7 +201,7 @@ format_uri(_Type, Bucket, Key, Prefix, 2) ->
 format_uri(Type, Bucket, Key, _Prefix, 3) ->
     io_lib:format("/types/~s/buckets/~s/keys/~s", [Type, Bucket, Key]).
 
--spec get_ctype(riak_kv_wm_utils_dict(), term()) -> string().
+-spec get_ctype(dict_t(), term()) -> string().
 %% @doc Work out the content type for this object - use the metadata if provided
 get_ctype(MD,V) ->
     case dict:find(?MD_CTYPE, MD) of

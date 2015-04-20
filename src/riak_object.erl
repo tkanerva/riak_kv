@@ -2,7 +2,7 @@
 %%
 %% riak_object: container for Riak data and metadata
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -26,24 +26,20 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
--include("riak_kv_wm_raw.hrl").
--include("riak_object.hrl").
 
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
+
+-include_lib("otp_compat/include/otp_compat.hrl").
+-include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 
 -type key() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
 
--ifdef(namespaced_types).
--type riak_object_dict() :: dict:dict().
--else.
--type riak_object_dict() :: dict().
--endif.
-
 -record(r_content, {
-          metadata :: riak_object_dict() | list(),
+          metadata :: dict_t() | list(),
           value :: term()
          }).
 
@@ -61,7 +57,7 @@
           key :: key(),
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
+          updatemetadata=dict:store(clean, true, dict:new()) :: dict_t(),
           updatevalue :: term()
          }).
 -opaque riak_object() :: #r_object{}.
@@ -108,7 +104,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
-          string() | riak_object_dict() | no_initial_metadata) -> riak_object().
+          string() | dict_t() | no_initial_metadata) -> riak_object().
 new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
     new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
@@ -522,7 +518,7 @@ merge_acc_to_contents(MergeAcc) ->
 %% just a {binary(), pos_integer()} pair.
 %%
 %% @see vclock:destructure_dot/1
--spec get_dot(riak_object_dict()) -> {ok, {vclock:vclock_node(), pos_integer()}} | undefined.
+-spec get_dot(dict_t()) -> {ok, {vclock:vclock_node(), pos_integer()}} | undefined.
 get_dot(Dict) ->
     case dict:find(?DOT, Dict) of
         {ok, Dot} ->
@@ -591,7 +587,7 @@ value_count(#r_object{contents=Contents}) -> length(Contents).
 
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
--spec get_contents(riak_object()) -> [{riak_object_dict(), value()}].
+-spec get_contents(riak_object()) -> [{dict_t(), value()}].
 get_contents(#r_object{contents=Contents}) ->
     [{Content#r_content.metadata, Content#r_content.value} ||
         Content <- Contents].
@@ -599,14 +595,14 @@ get_contents(#r_object{contents=Contents}) ->
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
--spec get_metadata(riak_object()) -> riak_object_dict().
+-spec get_metadata(riak_object()) -> dict_t().
 get_metadata(O=#r_object{}) ->
     % this blows up intentionally (badmatch) if more than one content value!
     [{Metadata,_V}] = get_contents(O),
     Metadata.
 
 %% @doc  Return a list of the metadata values for this riak_object.
--spec get_metadatas(riak_object()) -> [riak_object_dict()].
+-spec get_metadatas(riak_object()) -> [dict_t()].
 get_metadatas(#r_object{contents=Contents}) ->
     [Content#r_content.metadata || Content <- Contents].
 
@@ -631,7 +627,7 @@ hash(Obj=#r_object{}) ->
     erlang:phash2(to_binary(v0, UpdObj)).
 
 %% @doc  Set the updated metadata of an object to M.
--spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().
+-spec update_metadata(riak_object(), dict_t()) -> riak_object().
 update_metadata(Object=#r_object{}, M) ->
     Object#r_object{updatemetadata=dict:erase(clean, M)}.
 
@@ -640,7 +636,7 @@ update_metadata(Object=#r_object{}, M) ->
 update_value(Object=#r_object{}, V) -> Object#r_object{updatevalue=V}.
 
 %% @doc  Return the updated metadata of this riak_object.
--spec get_update_metadata(riak_object()) -> riak_object_dict().
+-spec get_update_metadata(riak_object()) -> dict_t().
 get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 
 %% @doc  Return the updated value of this riak_object.
@@ -779,7 +775,7 @@ assemble_index_specs(Indexes, IndexOp) ->
 %%       {Metadata, Value} pairs in MVs. Normal clients should use the
 %%       set_update_[value|metadata]() + apply_updates() method for changing
 %%       object contents.
--spec set_contents(riak_object(), [{riak_object_dict(), value()}]) -> riak_object().
+-spec set_contents(riak_object(), [{dict_t(), value()}]) -> riak_object().
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
@@ -797,12 +793,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;

@@ -2,7 +2,7 @@
 %%
 %% riak_kv_crdt: A general purpose bridge between a CRDT and riak_object
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -42,19 +42,14 @@
 -endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+-include_lib("otp_compat/include/otp_compat.hrl").
 
 -define(TAG, 69).
 -define(V1_VERS, 1).
 -define(V2_VERS, 2).
 
--ifdef(namespaced_types).
--type riak_kv_crdt_dict() :: dict:dict().
--else.
--type riak_kv_crdt_dict() :: dict().
--endif.
-
 -type crdts() :: [{DT_MOD::module(), crdt()}].
--type ro_content() :: {Meta::riak_kv_crdt_dict(), Value::binary()}.
+-type ro_content() :: {Meta::dict_t(), Value::binary()}.
 -type ro_contents() :: [ro_content()].
 -type precondition_error() :: {error, {precondition, {not_present, term()}}}.
 
@@ -157,7 +152,7 @@ is_crdt(RObj) ->
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
--spec crdt_value(module(), error | {ok, {riak_kv_crdt_dict(), crdt()}}) ->
+-spec crdt_value(module(), error | {ok, {dict_t(), crdt()}}) ->
                         {binary(), riak_dt:value()}.
 crdt_value(Type, error) ->
     {<<>>, Type:value(Type:new())};

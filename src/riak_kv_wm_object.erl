@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_object: Webmachine resource for KV object level operations.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -180,20 +180,15 @@
               security      %% security context
              }).
 
--ifdef(namespaced_types).
--type riak_kv_wm_object_dict() :: dict:dict().
--else.
--type riak_kv_wm_object_dict() :: dict().
--endif.
+-include_lib("webmachine/include/webmachine.hrl").
+-include_lib("otp_compat/include/otp_compat.hrl").
+-include("riak_kv_wm_raw.hrl").
 
 -type context() :: #ctx{}.
 
 -type link() :: {{Bucket::binary(), Key::binary()}, Tag::binary()}.
 
 -define(DEFAULT_TIMEOUT, 60000).
-
--include_lib("webmachine/include/webmachine.hrl").
--include("riak_kv_wm_raw.hrl").
 
 -spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
@@ -1064,7 +1059,7 @@ last_modified(RD, Ctx) ->
             {lists:max(LMDates), RD, Ctx}
     end.
 
--spec normalize_last_modified(riak_kv_wm_object_dict()) -> calendar:datetime().
+-spec normalize_last_modified(dict_t()) -> calendar:datetime().
 %% @doc Extract and convert the Last-Modified metadata into a normalized form
 %%      for use in the last_modified/2 callback.
 normalize_last_modified(MD) ->
@@ -1143,7 +1138,7 @@ extract_links_1([LinkHeader|Rest], BucketRegex, KeyRegex, BucketAcc, KeyAcc) ->
 extract_links_1([], _BucketRegex, _KeyRegex, BucketAcc, KeyAcc) ->
     {BucketAcc, KeyAcc}.
 
--spec get_ctype(riak_kv_wm_object_dict(), term()) -> string().
+-spec get_ctype(dict_t(), term()) -> string().
 %% @doc Work out the content type for this object - use the metadata if provided
 get_ctype(MD,V) ->
     case dict:find(?MD_CTYPE, MD) of

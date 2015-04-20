@@ -2,7 +2,7 @@
 %%
 %% riak_index_fsm: Manage secondary index queries.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -47,20 +47,16 @@
 -export([use_ack_backpressure/0,
          req/3]).
 
+-include_lib("otp_compat/include/otp_compat.hrl").
+
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
-
--ifdef(namespaced_types).
--type riak_kv_index_fsm_dict() :: dict:dict().
--else.
--type riak_kv_index_fsm_dict() :: dict().
--endif.
 
 -record(state, {from :: from(),
                 pagination_sort :: boolean(),
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
                 max_results :: all | pos_integer(),
-                results_per_vnode = dict:new() :: riak_kv_index_fsm_dict(),
+                results_per_vnode = dict:new() :: dict_t(),
                 results_sent = 0 :: non_neg_integer()}).
 
 %% @doc Returns `true' if the new ack-based backpressure index
@@ -99,7 +95,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
-    Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
+    Paginating = is_integer(MaxResults) andalso MaxResults > 0,
     PgSort = case {Paginating, PgSort0} of
         {true, _} ->
             true;

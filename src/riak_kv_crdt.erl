@@ -42,7 +42,7 @@
 -endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 
 -define(TAG, 69).
 -define(V1_VERS, 1).

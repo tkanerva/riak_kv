@@ -29,7 +29,7 @@
 
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
 

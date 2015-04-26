@@ -2,7 +2,7 @@
 %%
 %% riak_util: functions that are useful throughout Riak
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -49,11 +49,11 @@
          get_backend_config/3,
          is_modfun_allowed/2]).
 
--include_lib("riak_kv_vnode.hrl").
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+-include_lib("otp_compat/include/crypto_hash.hrl").
+-include_lib("riak_kv_vnode.hrl").
 
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
@@ -366,18 +366,10 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 
--ifndef(old_hash).
-md5(Bin) ->
-    crypto:hash(md5, Bin).
--else.
-md5(Bin) ->
-    crypto:md5(Bin).
--endif.
-
 %% @doc vtag creation function
 -spec make_vtag(erlang:timestamp()) -> list().
 make_vtag(Now) ->
-    <<HashAsNum:128/integer>> = md5(term_to_binary({node(), Now})),
+    <<HashAsNum:128/integer>> = ?crypto_hash_md5(term_to_binary({node(), Now})),
     riak_core_util:integer_to_list(HashAsNum,62).
 
 overload_reply({raw, ReqId, Pid}) ->

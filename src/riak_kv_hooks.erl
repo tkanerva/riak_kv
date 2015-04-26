@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% Copyright (c) 2012-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2012-2013,2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -97,21 +97,20 @@ del_hook(Type, Hook) ->
 get_hooks(Type) ->
     [Hook || {_, Hook} <- ets:lookup(?MODULE, Type)].
 
--ifdef(set_env_options).
--define(SETENV(Application, Par, Val, Opts),
-        application:set_env(Application, Par, Val, [{timeout, Opts}])).
--else.
--define(SETENV(Application, Par, Val, Opts),
-        application:set_env(Application, Par, Val, Opts)).
--endif.
-
 %% Backup the current ETS state to the application environment just in case
 %% riak_kv_sup dies and the ETS table is lost.
 -spec save_state() -> ok.
+-ifdef(save_state_with_timeout).
 save_state() ->
     Hooks = ets:tab2list(?MODULE),
-    ok = ?SETENV(riak_kv, riak_kv_hooks, Hooks, infinity),
+    ok = application:set_env(riak_kv, riak_kv_hooks, Hooks, [{timeout, infinity}]),
     ok.
+-else.  % not save_state_with_timeout
+save_state() ->
+    Hooks = ets:tab2list(?MODULE),
+    ok = application:set_env(riak_kv, riak_kv_hooks, Hooks, infinity),
+    ok.
+-endif. % save_state_with_timeout
 
 %% Restore registered hooks in the unlikely case that riak_kv_sup died and
 %% the ETS table was lost/recreated.

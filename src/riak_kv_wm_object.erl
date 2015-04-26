@@ -181,7 +181,8 @@
              }).
 
 -include_lib("webmachine/include/webmachine.hrl").
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
+-include_lib("otp_compat/include/crypto_hash.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -type context() :: #ctx{}.
@@ -1017,14 +1018,6 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
             {true, RD, Ctx}
     end.
 
--ifndef(old_hash).
-md5(Bin) ->
-    crypto:hash(md5, Bin).
--else.
-md5(Bin) ->
-    crypto:md5(Bin).
--endif.
-
 -spec generate_etag(#wm_reqdata{}, context()) ->
     {undefined|string(), #wm_reqdata{}, context()}.
 %% @doc Get the etag for this resource.
@@ -1038,7 +1031,7 @@ generate_etag(RD, Ctx) ->
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
             <<ETag:128/integer>> =
-                md5(term_to_binary(riak_object:vclock(Doc))),
+                ?crypto_hash_md5(term_to_binary(riak_object:vclock(Doc))),
             {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
 

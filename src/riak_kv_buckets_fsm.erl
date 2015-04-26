@@ -32,7 +32,7 @@
          process_results/2,
          finish/2]).
 
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().

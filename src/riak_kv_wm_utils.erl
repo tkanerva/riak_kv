@@ -46,7 +46,7 @@
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
--include_lib("otp_compat/include/otp_compat.hrl").
+-include_lib("otp_compat/include/ns_types.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -type jsonpropvalue() :: integer()|string()|boolean()|{struct,[jsonmodfun()]}.

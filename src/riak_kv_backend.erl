@@ -25,10 +25,6 @@
 -export([behaviour_info/1]).
 -export([callback_after/3]).
 
--undef(TEST).
-%% bogus change for rebuild purposes
--define(TEST, true).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).

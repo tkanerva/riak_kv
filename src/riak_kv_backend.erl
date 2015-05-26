@@ -25,6 +25,7 @@
 -export([behaviour_info/1]).
 -export([callback_after/3]).
 
+-undef(TEST).
 -define(TEST, true).
 
 -ifdef(TEST).

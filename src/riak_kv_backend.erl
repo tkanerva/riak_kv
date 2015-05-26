@@ -26,6 +26,7 @@
 -export([callback_after/3]).
 
 -undef(TEST).
+%% bogus change for rebuild purposes
 -define(TEST, true).
 
 -ifdef(TEST).

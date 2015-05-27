@@ -615,6 +615,7 @@ backend_can_index_reformat(Mod, ModState) ->
 -ifdef(TEST).
 
 multi_backend_test_() ->
+    io:format(user, "Code path: ~p~n", [code:get_path()]),
     {foreach,
      fun() ->
              crypto:start(),

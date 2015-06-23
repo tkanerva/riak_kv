@@ -454,6 +454,24 @@ legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
 legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
     Acc.
 
+add_streaming_opts(Query,
+                   FoldOpts0) ->
+    FoldOpts1 =
+    case Query of
+        %% Obey pagination limit, but skip if filtering, as you may need
+        %% an unknown number of pages worth after filtering
+        ?KV_INDEX_Q{max_results = N, term_regex = undefined,
+                    start_inclusive = SInc, end_inclusive = EInc} ->
+            [{limit, N}, {start_inclusive, SInc}, {end_inclusive, EInc}
+             | FoldOpts0];
+        ?KV_INDEX_Q{start_inclusive = SInc, end_inclusive = EInc} ->
+            [{start_inclusive, SInc}, {end_inclusive, EInc}
+             | FoldOpts0];
+        _ ->
+            FoldOpts0
+    end,
+    [{fold_method, streaming} | FoldOpts1].
+
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
@@ -481,13 +499,22 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
+    LastKey = to_last_key(Limiter),
+    FoldOpts1 = [{first_key, FirstKey}, {last_key, LastKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+
+    FoldOpts2 =
+    case app_helper:get_env(riak_kv, use_eleveldb_streaming_for_2i, false) of
+        true ->
+            add_streaming_opts(Limiter, FoldOpts1);
+        false ->
+            IteratorRefresh ++ FoldOpts1
+    end,
 
     ObjectFolder =
         fun() ->
                 try
-                    eleveldb:fold(Ref, FoldFun, Acc, FoldOpts1)
+                    eleveldb:fold(Ref, FoldFun, Acc, FoldOpts2)
                 catch
                     {break, AccFinal} ->
                         AccFinal
@@ -881,6 +908,25 @@ to_first_key({index, Bucket, Q}) ->
     to_first_key({index, Bucket, UpgradeQ});
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
+
+%% For buckets, construct bucket binary name with appended 0, which is the
+%% lowest possible next bucket you could find.
+to_last_key({bucket, {Type, Bucket}}) ->
+    sext:encode({o, {Type, <<Bucket/binary, 0>>}, <<>>});
+to_last_key({bucket, Bucket}) ->
+    sext:encode({o, <<Bucket/binary, 0>>, <<>>});
+to_last_key({index, Bucket,
+              ?KV_INDEX_Q{filter_field=Field,
+                          end_term=undefined}}) when Field == <<"$key">>;
+                                                     Field == <<"$bucket">> ->
+    to_last_key({bucket, Bucket});
+to_last_key({index, Bucket,
+              ?KV_INDEX_Q{filter_field=Field,
+                          end_term=EndKey}}) when Field == <<"$key">>;
+                                                  Field == <<"$bucket">> ->
+    to_object_key(Bucket, EndKey);
+to_last_key(_) ->
+    undefined.
 
 % @doc If index query, encode key using legacy sext format.
 to_legacy_first_key({index, Bucket, {eq, Field, Term}}) ->

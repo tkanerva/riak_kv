@@ -722,8 +722,16 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     PgSort = proplists:get_value(pagination_sort, Opts),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort]]),
-    wait_for_query_results(ReqId, Timeout).
+    InitArgs = [{raw, ReqId, Me},
+                [Bucket, none, Query, Timeout, MaxResults, PgSort]],
+    case riak_kv_index_fsm_sup:start_index_fsm(Node, InitArgs) of
+        {ok, FsmPid} ->
+            wait_for_query_results(FsmPid, ReqId, Timeout);
+        {error, CreationErr} ->
+            {error, CreationErr};
+        CreationErr ->
+            {error, CreationErr}
+    end.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
@@ -844,14 +852,18 @@ wait_for_listbuckets(ReqId) ->
     end.
 
 %% @private
-wait_for_query_results(ReqId, Timeout) ->
-    wait_for_query_results(ReqId, Timeout, []).
+wait_for_query_results(FsmPid, ReqId, Timeout) ->
+    wait_for_query_results(FsmPid, ReqId, Timeout, []).
 %% @private
-wait_for_query_results(ReqId, Timeout, Acc) ->
+wait_for_query_results(FsmPid, ReqId, Timeout, Acc) ->
     receive
-        {ReqId, done} -> {ok, lists:flatten(lists:reverse(Acc))};
-        {ReqId,{results, Res}} -> wait_for_query_results(ReqId, Timeout, [Res | Acc]);
-        {ReqId, Error} -> {error, Error}
+        {ReqId, done} ->
+            {ok, lists:flatten(lists:reverse(Acc))};
+        {ReqId,{results, Res}} ->
+            FsmPid ! {{ReqId, self()}, ack_results},
+            wait_for_query_results(FsmPid, ReqId, Timeout, [Res | Acc]);
+        {ReqId, Error} ->
+            {error, Error}
     after Timeout ->
             {error, timeout}
     end.

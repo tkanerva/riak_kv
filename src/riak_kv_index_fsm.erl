@@ -44,8 +44,7 @@
          process_results/3,
          process_results/2,
          finish/2]).
--export([use_ack_backpressure/0,
-         req/3]).
+-export([req/3]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -61,29 +60,18 @@
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
                 max_results :: all | pos_integer(),
                 results_per_vnode = dict:new() :: riak_kv_index_fsm_dict(),
-                results_sent = 0 :: non_neg_integer()}).
-
-%% @doc Returns `true' if the new ack-based backpressure index
-%% protocol should be used.  This decision is based on the
-%% `index_backpressure' setting in `riak_kv''s application
-%% environment.
--spec use_ack_backpressure() -> boolean().
-use_ack_backpressure() ->
-    riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
+                results_sent = 0 :: non_neg_integer(),
+                pending_results = queue:new(),
+                max_unacked = 100 :: non_neg_integer(),
+                unacked = 0 :: non_neg_integer()
+               }).
 
 %% @doc Construct the correct index command record.
 -spec req(binary(), term(), term()) -> term().
 req(Bucket, ItemFilter, Query) ->
-    case use_ack_backpressure() of
-        true ->
-            ?KV_INDEX_REQ{bucket=Bucket,
-                          item_filter=ItemFilter,
-                          qry=Query};
-        false ->
-            #riak_kv_index_req_v1{bucket=Bucket,
-                                  item_filter=ItemFilter,
-                                  qry=Query}
-    end.
+    ?KV_INDEX_REQ{bucket=Bucket,
+                  item_filter=ItemFilter,
+                  qry=Query}.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
@@ -95,7 +83,8 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, all]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
-init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+init(From={_, _, ClientPid},
+     [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -108,6 +97,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
         _ ->
             PgSort0
     end,
+    link(ClientPid),
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
@@ -118,53 +108,63 @@ plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
 plan(_CoverageVNodes, State) ->
     {ok, State}.
 
+process_results(_, _) ->
+    {error, unexpected_use_of_process_results_2_wtf}.
+
 process_results(_VNode, {error, Reason}, _State) ->
     {error, Reason};
+process_results(ClientPid, ack_results,
+                State = #state{from={raw, ReqId, ClientPid},
+                               unacked=Unacked, max_unacked=MaxUnacked,
+                               pending_results=Pending}) ->
+    State2 = State#state{unacked = Unacked - 1},
+    lager:info("Ack. Unacked ~p, pending ~p",
+               [Unacked - 1, queue:len(Pending)]),
+    State3 =
+        case Unacked of
+            MaxUnacked ->
+                case queue:out(Pending) of
+                    {empty, _} ->
+                        State2;
+                    {{value, {VNode, From, Len, Results}}, Pending2} ->
+                        maybe_send_results(ClientPid, ReqId, VNode, From, Len,
+                                           Results,
+                                           State2#state{
+                                             pending_results=Pending2})
+                end;
+            _ ->
+                State2
+        end,
+    {ok, State3};
 process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, results_sent=Y})  when Y >= X ->
     riak_kv_vnode:stop_fold(From),
     {done, State};
-process_results(VNode, {From, Bucket, Results}, State) ->
-    case process_results(VNode, {Bucket, Results}, State) of
-        {ok, State2 = #state{pagination_sort=true}} ->
-            #state{results_per_vnode=PerNode, max_results=MaxResults} = State2,
-            VNodeCount = dict:fetch(VNode, PerNode),
-            case VNodeCount < MaxResults of
-                true ->
-                    _ = riak_kv_vnode:ack_keys(From),
-                    {ok, State2};
-                false ->
-                    riak_kv_vnode:stop_fold(From),
-                    {done, State2}
-            end;
-        {ok, State2} ->
-            _ = riak_kv_vnode:ack_keys(From),
-            {ok, State2};
-        {done, State2} ->
-            riak_kv_vnode:stop_fold(From),
-            {done, State2}
-    end;
-process_results(VNode, {_Bucket, Results}, State = #state{pagination_sort=true}) ->
+process_results(VNode, {From, _Bucket, Results}, State = #state{pagination_sort=true}) ->
     #state{merge_sort_buffer=MergeSortBuffer, results_per_vnode=PerNode,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
     {ToSend, NewBuff} = update_buffer(VNode, Results, MergeSortBuffer),
     NumResults = length(Results),
     NewPerNode = dict:update(VNode, fun(C) -> C + NumResults end, NumResults, PerNode),
+    State2 = State#state{merge_sort_buffer=NewBuff,
+                         results_per_vnode=NewPerNode},
     LenToSend = length(ToSend),
-    {Response, ResultsLen, ResultsToSend} = get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
-    send_results(ClientPid, ReqId, ResultsToSend),
-    {Response, State#state{merge_sort_buffer=NewBuff,
-                           results_per_vnode=NewPerNode,
-                           results_sent=ResultsSent+ResultsLen}};
+    {Response, ResultsLen, ResultsToSend} =
+        get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
+    State3 = maybe_send_results(ClientPid, ReqId, VNode, From,
+                                ResultsLen, ResultsToSend, State2),
+    {Response, State3};
 process_results(VNode, done, State = #state{pagination_sort=true}) ->
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
     BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),
     {done, State#state{merge_sort_buffer=BufferWithNewResults}};
-process_results(_VNode, {_Bucket, Results}, State) ->
+process_results(VNode, {From, _Bucket, Results}, State) ->
     #state{from={raw, ReqId, ClientPid}} = State,
-    send_results(ClientPid, ReqId, Results),
-    {ok, State};
+    State2 = maybe_send_results(ClientPid, ReqId, VNode, From, undefined, Results, State),
+    {ok, State2};
+process_results(VNode, {Bucket, Results}, State) ->
+    process_results(VNode, {undefined, Bucket, Results}, State);
 process_results(_VNode, done, State) ->
     {done, State}.
 
@@ -182,26 +182,49 @@ get_results_to_send(LenToSend, ToSend, _, _) ->
     {ok, LenToSend, ToSend}.
 
 %% @private send results, but only if there are some
-send_results(_ClientPid, _ReqId, []) ->
-    ok;
-send_results(ClientPid, ReqId, ResultsToSend) ->
-    ClientPid ! {ReqId, {results, ResultsToSend}}.
+maybe_send_results(_ClientPid, _ReqId, _VNode, _From, _Len, [], State) ->
+    State;
+maybe_send_results(_ClientPid, _ReqId, VNode, From, Len, ResultsToSend,
+                   State = #state{unacked=MaxUnacked,
+                                  max_unacked=MaxUnacked,
+                                  pending_results=Pending}) ->
+    %% Reached max unacked. Store and send later.
+    Pending2 = queue:in({VNode, From, Len, ResultsToSend}, Pending),
+    lager:info("Add to pending: Unacked ~p, pending ~p",
+               [MaxUnacked, queue:len(Pending2)]),
+    State#state{pending_results=Pending2};
+maybe_send_results(ClientPid, ReqId, VNode, From, Len, ResultsToSend,
+                   State = #state{unacked=Unacked,
+                                  results_sent=ResultsSent,
+                                  pagination_sort=PgSort}) ->
+    lager:info("Sending. Unacked = ~p", [Unacked+1]),
+    ClientPid ! {ReqId, {results, ResultsToSend}},
+    %% Either acknowledge this batch or stop the whole thing if enough
+    %% results from that vnode to satisfy max_results
+    case {From, PgSort} of
+        {undefined, _} ->
+            ok;
+        {_, true} ->
+            #state{results_per_vnode=PerNode, max_results=MaxResults} = State,
+            VNodeCount = dict:fetch(VNode, PerNode),
+            case VNodeCount < MaxResults of
+                true ->
+                    _ = riak_kv_vnode:ack_keys(From);
+                false ->
+                    riak_kv_vnode:stop_fold(From)
+            end;
+        {_, _} ->
+            _ = riak_kv_vnode:ack_keys(From)
+    end,
+    State#state{unacked=Unacked+1,
+                results_sent=update_results_sent(ResultsSent, Len)}.
 
-
-%% Legacy, unsorted 2i, should remove?
-process_results({error, Reason}, _State) ->
-    {error, Reason};
-process_results({From, Bucket, Results},
-                StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    process_query_results(Bucket, Results, ReqId, ClientPid),
-    _ = riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
-    {ok, StateData};
-process_results({Bucket, Results},
-                StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    process_query_results(Bucket, Results, ReqId, ClientPid),
-    {ok, StateData};
-process_results(done, StateData) ->
-    {done, StateData}.
+update_results_sent(undefined, _) ->
+    undefined;
+update_results_sent(_, undefined) ->
+    undefined;
+update_results_sent(Sent, Len) ->
+    Sent + Len.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
@@ -228,10 +251,3 @@ finish(clean,
     ClientPid ! {ReqId, {results, DownTheWire}},
     ClientPid ! {ReqId, done},
     {stop, normal, State}.
-
-%% ===================================================================
-%% Internal functions
-%% ===================================================================
-
-process_query_results(_Bucket, Results, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {results, Results}}.

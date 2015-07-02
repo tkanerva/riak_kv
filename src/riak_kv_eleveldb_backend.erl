@@ -805,12 +805,7 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
 %% @private
 %% To stop a fold in progress when pagination limit is reached.
 stoppable_fold(Fun, Bucket, Item, Acc) ->
-    try
-        Fun(Bucket, Item, Acc)
-    catch
-        stop_fold ->
-            throw({break, Acc})
-    end.
+        Fun(Bucket, Item, Acc).
 
 
 

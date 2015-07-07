@@ -57,11 +57,15 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Decoded = riak_pb_codec:decode(Code, Bin),
+    {ok, Decoded}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
-    {ok, riak_pb_codec:encode(Message)}.
+    dyntrace:p(1,1),
+    Encoded = riak_pb_codec:encode(Message),
+    dyntrace:p(1,2),
+    {ok, Encoded}.
 
 process(Req=#rpbcsbucketreq{}, State) ->
     #rpbcsbucketreq{start_key=StartKey,
@@ -117,10 +121,19 @@ process_stream({ReqId, Error}, ReqId, State=#state{req_id=ReqId}) ->
 process_stream(_,_,State) ->
     {ignore, State}.
 
+encode_result(_B, {K, V}) when is_binary(V)->
+    dyntrace:p(2, 1),
+    GetResp = riak_pb_kv_codec:encode_get_response(V),
+    dyntrace:p(2, 2),
+    #rpbindexobject{key=K, object=GetResp};
 encode_result(B, {K, V}) ->
     RObj = riak_object:from_binary(B, K, V),
+    dyntrace:p(3,1),
     Contents = riak_pb_kv_codec:encode_contents(riak_object:get_contents(RObj)),
+    dyntrace:p(3,2),
+    dyntrace:p(4,1),
     VClock = pbify_rpbvc(riak_object:vclock(RObj)),
+    dyntrace:p(4,2),
     GetResp = #rpbgetresp{vclock=VClock, content=Contents},
     #rpbindexobject{key=K, object=GetResp}.
 

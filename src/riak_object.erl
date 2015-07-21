@@ -1060,8 +1060,7 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
     ValueLen = byte_size(ValueBin),
     KeyBin = encode_maybe_meta_binary(Key),
     KeyLen = byte_size(KeyBin),
-    MetaBin = <<RestBin/binary, KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
-    {Elems, MetaBin}.
+    {Elems, <<RestBin/binary, KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>}.
 
 encode_maybe_meta_binary(Bin) when is_binary(Bin) ->
     <<1:8, Bin/binary>>;

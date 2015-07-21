@@ -2286,7 +2286,11 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
         false ->
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
-            BinSize = size(EncodedVal),
+
+            % TODO we must calc the size of the encoded object, is this useful
+            % for the backend i.e. {Size::integer(), IOList::iodata()}.
+            BinSize = iolist_size(EncodedVal),
+
             %% Report or fail on large objects
             case DoMaxCheck andalso
                  BinSize > app_helper:get_env(riak_kv, max_object_size) of
@@ -2305,7 +2309,9 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
+                    % FIXME until the backend can handle it we need to convert
+                    % to binary at the last minute
+                    PutRet = Mod:put(Bucket, Key, IndexSpecs, iolist_to_binary(EncodedVal),
                                      ModState),
                     {PutRet, EncodedVal}
             end

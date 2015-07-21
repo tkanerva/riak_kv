@@ -916,7 +916,7 @@ value_size(Value) when is_binary(Value) -> size(Value);
 value_size(Value) -> size(term_to_binary(Value)).
 
 %% @doc Convert riak object to binary form
--spec to_binary(binary_version(), riak_object()) -> binary().
+-spec to_binary(binary_version(), riak_object()) -> iodata().
 to_binary(v0, RObj) ->
     term_to_binary(RObj);
 to_binary(v1, #r_object{contents=Contents, vclock=VClock}) ->
@@ -1014,26 +1014,25 @@ new_v1(Vclock, Siblings) ->
     VclockBin = term_to_binary(Vclock),
     VclockLen = byte_size(VclockBin),
     SibCount = length(Siblings),
-    SibsBin = bin_contents(Siblings),
-    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
+    SibsBin = [bin_content(Sib) || Sib <- Siblings],
+    [<<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer>>, VclockBin, <<SibCount:32/integer>>, SibsBin].
 
 bin_content(#r_content{metadata=Meta, value=Val}) ->
     ValBin = encode_maybe_binary(Val),
-    ValLen = byte_size(ValBin),
+    ValLen = iolist_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
-    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
-
-bin_contents(Contents) ->
-    F = fun(Content, Acc) ->
-                <<Acc/binary, (bin_content(Content))/binary>>
-        end,
-    lists:foldl(F, <<>>, Contents).
+    [<<ValLen:32/integer>>, ValBin, <<MetaLen:32/integer>>, MetaBin].
 
 meta_bin(MD) ->
-    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
-                                                          {{undefined, <<0>>, undefined}, <<>>},
-                                                          MD),
+    Fold_acc = {{undefined, <<0>>, undefined}, <<>>},
+    {{VTagVal, Deleted, LastModVal}, RestBin} = 
+        case dict:size(MD) of
+            0 ->
+                Fold_acc;
+            _ ->
+                dict:fold(fun fold_meta_to_bin/3, Fold_acc, MD)
+        end,
     VTagBin = case VTagVal of
                   undefined ->  ?EMPTY_VTAG_BIN;
                   _ -> list_to_binary(VTagVal)
@@ -1057,15 +1056,20 @@ fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
 fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
-    ValueBin = encode_maybe_binary(Value),
+    ValueBin = encode_maybe_meta_binary(Value),
     ValueLen = byte_size(ValueBin),
-    KeyBin = encode_maybe_binary(Key),
+    KeyBin = encode_maybe_meta_binary(Key),
     KeyLen = byte_size(KeyBin),
-    MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
-    {Elems, <<RestBin/binary, MetaBin/binary>>}.
+    MetaBin = <<RestBin/binary, KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
+    {Elems, MetaBin}.
+
+encode_maybe_meta_binary(Bin) when is_binary(Bin) ->
+    <<1:8, Bin/binary>>;
+encode_maybe_meta_binary(Bin) ->
+    <<0, (term_to_binary(Bin))/binary>>.
 
 encode_maybe_binary(Bin) when is_binary(Bin) ->
-    <<1, Bin/binary>>;
+    [<<1:8>>, Bin];
 encode_maybe_binary(Bin) ->
     <<0, (term_to_binary(Bin))/binary>>.
 
@@ -1518,5 +1522,12 @@ verify_contents([], []) ->
 verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
     ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
     verify_contents(Rest, Rest2).
+
+fold_meta_to_bin_test() ->
+    ?assertMatch(
+        {{undefined, <<0>>, undefined}, <<_/binary>>},
+        fold_meta_to_bin(
+            <<"X-Riak-Meta">>, [], {{undefined, <<0>>, undefined}, << >>})
+    ).
 
 -endif.

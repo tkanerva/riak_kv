@@ -496,7 +496,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 maybe_pre_encode_riak_object(RObj, Options, VNodeOptions) ->
     case get_option(is_write_once, Options) of
         true ->
-            RObjEncoded = riak_object:to_binary(v1, RObj),
+            % FIXME once IO lists are supported in the backend we should NOT
+            % convert to binary
+            RObjEncoded = iolist_to_binary(riak_object:to_binary(v1, RObj)),
             [{write_once, {is_write_once, RObjEncoded}} | VNodeOptions];
         _ ->
             VNodeOptions

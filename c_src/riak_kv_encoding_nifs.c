@@ -18,7 +18,7 @@ SibCount : int32
 For each Sibling:
 
     ValLen : int32
-    ValBin : bytes[ValLen]
+    ValBin : bytes[ValLen] // Contains 1 prefix to indicate binary, not t2b
     MetaLen : int32
     LastModMega : uint32
     LastModSecs : uint32
@@ -314,6 +314,11 @@ static int rke_slice_skip(slice_t * slice, size_t n)
 void rke_bout_make_binaries(bin_out_t * out, ErlNifEnv * env)
 {
     int i;
+    response_binary_t * cur_bin = &out->bins[out->current_idx];
+    // Trim last binary to size.
+    if (!cur_bin->owned && out->offset < cur_bin->bin.size)
+        enif_realloc_binary(&cur_bin->bin, out->offset);
+
     for (i = 0; i <= out->current_idx; ++i) {
         if (!out->bins[i].owned) {
             out->bins[i].term = enif_make_binary(env, &out->bins[i].bin);
@@ -408,7 +413,9 @@ int rke_encode_obj(ErlNifEnv * env,
         // Read value, skip meta-data.
         if (!rke_read_bytes32(&input, &val_slice)
             || !rke_read_big_endian_uint32(&input, &meta_len)
-            || !rke_slice_skip(&input, meta_len))
+            || !rke_slice_skip(&input, meta_len)
+            // Skip first byte marker in value binary
+            || !rke_slice_skip(&val_slice, 1))
             return 0;
 
         content_size = 1 + rke_varsize(val_slice.size) + val_slice.size;
@@ -428,12 +435,11 @@ int rke_encode_obj(ErlNifEnv * env,
 
     size_t obj_sz = 1 + vclen_varsize + vc_slice.size + tot_sib_size;
     uint8_t * obj_sz_ptr = rke_bout_loc_ptr(out, obj_size_loc);
-    size_t pair_sz = obj_sz + 1 + 4 + 1 + klen_varsize + key_slice.size; 
-    uint8_t * pair_sz_placeholder = rke_bout_loc_ptr(out, pair_size_loc);
+    size_t pair_sz = 1 + klen_varsize + key_slice.size + 1 + 4 + obj_sz;
+    uint8_t * pair_sz_ptr = rke_bout_loc_ptr(out, pair_size_loc);
 
     rke_write_varint4(obj_sz, obj_sz_ptr);
-    rke_write_varint4(pair_sz, pair_sz_placeholder);
-    rke_bout_make_binaries(out, env);
+    rke_write_varint4(pair_sz, pair_sz_ptr);
 
     return 1;
 }
@@ -468,6 +474,8 @@ ERL_NIF_TERM rke_encode_csbucket_resp(ErlNifEnv* env, int argc,
             return enif_make_tuple2(env, ATOM_ERROR, ATOM_INVALID_INPUT);
         }
     }
+
+    rke_bout_make_binaries(&out, env);
 
     return enif_make_tuple2(env, ATOM_OK, rke_bout_to_term(&out, env));
 }

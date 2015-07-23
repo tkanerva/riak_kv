@@ -45,6 +45,7 @@
          pb_encode_resp/1,
          decode/2,
          encode/1,
+         encode_result/2,
          process/2,
          process_stream/3]).
 
@@ -122,8 +123,8 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {results, Results0}}, ReqId, State=#state{req_id=ReqId, req=Req, result_count=Count}) ->
-    #rpbcsbucketreq{max_results=MaxResults, bucket=Bucket} = Req,
-    %%#rpbcsbucketreq{max_results=MaxResults} = Req,
+    %%#rpbcsbucketreq{max_results=MaxResults, bucket=Bucket} = Req,
+    #rpbcsbucketreq{max_results=MaxResults} = Req,
     dyntrace:p(3),
     Count2 = length(Results0) + Count,
     %% results are {o, Key, Binary} where binary is a riak object
@@ -132,8 +133,7 @@ process_stream({ReqId, {results, Results0}}, ReqId, State=#state{req_id=ReqId, r
     dyntrace:p(4),
     case app_helper:get_env(riak_kv, debug_hand_coded_pb, false) of
         true ->
-            Results = [encode_result(Bucket, {K, V}) || {o, K, V} <- Results0],
-            EResp = riak_pb_codec:encode(#rpbcsbucketresp{objects=Results}),
+            EResp = pb_encode_resp(Results0, false),
             B1 = iolist_to_binary(EResp),
             B2 = iolist_to_binary(PbResp),
             case B1 == B2 of
@@ -154,15 +154,15 @@ process_stream(_,_,State) ->
     {ignore, State}.
 
 pb_encode_resp(Results) ->
-    case app_helper:get_env(riak_kv, use_encoding_nifs, true) of
-        true ->
-            {ok, Encoded} = riak_kv_encoding_nifs:encode_csbucket_resp(Results),
-            Encoded;
-        false ->
-            SizedIdxPairs = [pb_encode_idx_pair(Result) || Result <- Results],
-            [41, [[10, to_varint(Size), IdxPairList] ||
-                  {Size, IdxPairList} <- SizedIdxPairs]]
-    end.
+    pb_encode_resp(Results, app_helper:get_env(riak_kv, use_encoding_nifs, true)).
+
+pb_encode_resp(Results, true) ->
+    {ok, Encoded} = riak_kv_encoding_nifs:encode_csbucket_resp(Results),
+    Encoded;
+pb_encode_resp(Results, false) ->
+    SizedIdxPairs = [pb_encode_idx_pair(Result) || Result <- Results],
+    [41, [[10, to_varint(Size), IdxPairList] ||
+          {Size, IdxPairList} <- SizedIdxPairs]].
 
 pb_encode_idx_pair({o, K, V}) ->
     dyntrace:p(1),
@@ -196,12 +196,12 @@ to_varint(I, Bin) ->
 
 pb_encode_obj(<<53, 1, VCLen:32/integer, VC:VCLen/binary,
                 SibCount:32/integer, Sibs/binary>>) ->
-    VCLenVarint = to_varint(VCLen),
-    L1 = [18, VCLenVarint, VC],
-    L1Len = VCLen + 1 + varint_size(VCLenVarint),
     PBSibs = pb_encode_sibs(SibCount, Sibs),
-    {TotSibSize, L2} = add_sibs(PBSibs, L1, 0),
-    {L1Len+TotSibSize, L2}.
+    {TotSibSize, L2} = add_sibs(PBSibs, [], 0),
+    VCLenVarint = to_varint(VCLen),
+    L1 = [18, VCLenVarint, VC | L2],
+    L1Len = VCLen + 1 + varint_size(VCLenVarint) + TotSibSize,
+    {L1Len, L1}.
 
 add_sibs([], L, S) ->
     {S, L};

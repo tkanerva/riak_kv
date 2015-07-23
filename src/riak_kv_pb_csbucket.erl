@@ -85,16 +85,16 @@ process(Req=#rpbcsbucketreq{}, State) ->
                 ]),
     maybe_perform_query(Query, Req, State).
 
-%write_bin_to_file(B, FName) ->
-%    {ok, F} = file:open(FName, [write]),
-%    ok = write_bin_lines(B, F),
-%    ok = file:close(F).
-%
-%write_bin_lines(<<>>, _) ->
-%    ok;
-%write_bin_lines(<<B, Rest/binary>>, F) ->
-%    file:write(F, [integer_to_binary(B), "\n"]),
-%    write_bin_lines(Rest, F).
+write_bin_to_file(B, FName) ->
+    {ok, F} = file:open(FName, [write]),
+    ok = write_bin_lines(B, F),
+    ok = file:close(F).
+
+write_bin_lines(<<>>, _) ->
+    ok;
+write_bin_lines(<<B, Rest/binary>>, F) ->
+    file:write(F, [integer_to_binary(B), "\n"]),
+    write_bin_lines(Rest, F).
 
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
@@ -122,30 +122,30 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {results, Results0}}, ReqId, State=#state{req_id=ReqId, req=Req, result_count=Count}) ->
-    %%#rpbcsbucketreq{max_results=MaxResults, bucket=Bucket} = Req,
-    #rpbcsbucketreq{max_results=MaxResults} = Req,
+    #rpbcsbucketreq{max_results=MaxResults, bucket=Bucket} = Req,
+    %%#rpbcsbucketreq{max_results=MaxResults} = Req,
     dyntrace:p(3),
     Count2 = length(Results0) + Count,
     %% results are {o, Key, Binary} where binary is a riak object
     Continuation = make_continuation(MaxResults, lists:last(Results0), Count2),
     PbResp = pb_encode_resp(Results0),
     dyntrace:p(4),
-%%    case app_helper:get_env(riak_kv, debug_hand_coded_pb, false) of
-%%        true ->
-%%            Results = [encode_result(Bucket, {K, V}) || {o, K, V} <- Results0],
-%%            EResp = riak_pb_codec:encode(#rpbcsbucketresp{objects=Results}),
-%%            B1 = iolist_to_binary(EResp),
-%%            B2 = iolist_to_binary(PbResp),
-%%            case B1 == B2 of
-%%                true -> ok;
-%%                false ->
-%%                    write_bin_to_file(B1, "/tmp/original_pb.txt"),
-%%                    write_bin_to_file(B2, "/tmp/new_pb.txt"),
-%%                    throw(pb_is_fucked)
-%%            end;
-%%        false ->
-%%            ok
-%%    end,
+    case app_helper:get_env(riak_kv, debug_hand_coded_pb, false) of
+        true ->
+            Results = [encode_result(Bucket, {K, V}) || {o, K, V} <- Results0],
+            EResp = riak_pb_codec:encode(#rpbcsbucketresp{objects=Results}),
+            B1 = iolist_to_binary(EResp),
+            B2 = iolist_to_binary(PbResp),
+            case B1 == B2 of
+                true -> ok;
+                false ->
+                    write_bin_to_file(B1, "/tmp/original_pb.txt"),
+                    write_bin_to_file(B2, "/tmp/new_pb.txt"),
+                    throw(pb_is_fucked)
+            end;
+        false ->
+            ok
+    end,
     {reply, {pre_encoded, PbResp},
      State#state{continuation=Continuation, result_count=Count2}};
 process_stream({ReqId, Error}, ReqId, State=#state{req_id=ReqId}) ->
@@ -154,9 +154,14 @@ process_stream(_,_,State) ->
     {ignore, State}.
 
 pb_encode_resp(Results) ->
-    SizedIdxPairs = [pb_encode_idx_pair(Result) || Result <- Results],
-    [41, [[10, to_varint(Size), IdxPairList] ||
-          {Size, IdxPairList} <- SizedIdxPairs]].
+    case app_helper:get_env(riak_kv, use_encoding_nifs, true) of
+        true ->
+            riak_kv_encoding_nifs:encode_csbucket_resp(Results);
+        false ->
+            SizedIdxPairs = [pb_encode_idx_pair(Result) || Result <- Results],
+            [41, [[10, to_varint(Size), IdxPairList] ||
+                  {Size, IdxPairList} <- SizedIdxPairs]]
+    end.
 
 pb_encode_idx_pair({o, K, V}) ->
     dyntrace:p(1),
@@ -234,24 +239,24 @@ sample_encode(VC, K, V) ->
                                        }
                                     ]}).
 
-%encode_result(_B, {K, V}) when is_binary(V)->
-%    dyntrace:p(2, 1),
-%    GetResp = riak_pb_kv_codec:encode_get_response(V),
-%    dyntrace:p(2, 2),
-%    #rpbindexobject{key=K, object=GetResp};
-%encode_result(B, {K, V}) ->
-%    RObj = riak_object:from_binary(B, K, V),
-%    dyntrace:p(3,1),
-%    Contents = riak_pb_kv_codec:encode_contents(riak_object:get_contents(RObj)),
-%    dyntrace:p(3,2),
-%    dyntrace:p(4,1),
-%    VClock = pbify_rpbvc(riak_object:vclock(RObj)),
-%    dyntrace:p(4,2),
-%    GetResp = #rpbgetresp{vclock=VClock, content=Contents},
-%    #rpbindexobject{key=K, object=GetResp}.
-%
-%pbify_rpbvc(Vc) ->
-%    riak_object:encode_vclock(Vc).
+encode_result(_B, {K, V}) when is_binary(V)->
+    dyntrace:p(2, 1),
+    GetResp = riak_pb_kv_codec:encode_get_response(V),
+    dyntrace:p(2, 2),
+    #rpbindexobject{key=K, object=GetResp};
+encode_result(B, {K, V}) ->
+    RObj = riak_object:from_binary(B, K, V),
+    dyntrace:p(3,1),
+    Contents = riak_pb_kv_codec:encode_contents(riak_object:get_contents(RObj)),
+    dyntrace:p(3,2),
+    dyntrace:p(4,1),
+    VClock = pbify_rpbvc(riak_object:vclock(RObj)),
+    dyntrace:p(4,2),
+    GetResp = #rpbgetresp{vclock=VClock, content=Contents},
+    #rpbindexobject{key=K, object=GetResp}.
+
+pbify_rpbvc(Vc) ->
+    riak_object:encode_vclock(Vc).
 
 make_continuation(MaxResults, {o, K, _V}, MaxResults) ->
     riak_index:make_continuation([K]);

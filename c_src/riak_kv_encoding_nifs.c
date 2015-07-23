@@ -300,7 +300,7 @@ static int rke_read_bytes32(slice_t * in, slice_t * slice)
 
 static int rke_slice_skip(slice_t * slice, size_t n)
 {
-    if (slice->size > n) {
+    if (slice->size >= n) {
         slice->size -= n;
         slice->data += n;
         return 1;

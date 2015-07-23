@@ -156,7 +156,8 @@ process_stream(_,_,State) ->
 pb_encode_resp(Results) ->
     case app_helper:get_env(riak_kv, use_encoding_nifs, true) of
         true ->
-            riak_kv_encoding_nifs:encode_csbucket_resp(Results);
+            {ok, Encoded} = riak_kv_encoding_nifs:encode_csbucket_resp(Results),
+            Encoded;
         false ->
             SizedIdxPairs = [pb_encode_idx_pair(Result) || Result <- Results],
             [41, [[10, to_varint(Size), IdxPairList] ||

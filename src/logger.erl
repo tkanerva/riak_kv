@@ -1,10 +1,11 @@
 -module(logger).
--export([logging_is_on/0,log/1,
-	 init/1,handle_cast/2,terminate/2,
+-behaviour(gen_server).
+-export([logging_is_on/0,
+	 log/1,
 	 correct_content_test/0,
 	 correct_no_files_test/0,
 	 duration_works_test/0]).
-
+-export([init/1,handle_cast/2,terminate/2]).
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
@@ -15,9 +16,11 @@
 
 %1 GB
 -define(DEFAULT_LOG_SIZE,(1024*1024*1024)).
+%relative path from riak_kv/src to the log folder
+-define(LOG_PATH,"../log/").
 
 %Non-genserver callbacks associated with the logger:
--spec logging_is_on() -> bool().
+-spec logging_is_on() -> boolean().
 logging_is_on()->ets:lookup(logger_state_ets,is_logging)==[{is_logging,true}].
 set_logging_is_on(Bool)->ets:insert(logger_state_ets,{is_logging,Bool}).
 log(Term)->
@@ -52,7 +55,8 @@ new_log(Size) ->
 				       /= {error,no_such_log}],
 	{ok,Log} = disk_log:open([
 		{name,logger_log},
-		{file,lists:flatten(io_lib:format("log/logger_log~p~p.log",
+		{file,lists:flatten(io_lib:format(?LOG_PATH++
+						  "logger_log~p~p.log",
 						[Node,Time]))},
 		{type,halt},
 		{format,internal},
@@ -111,9 +115,14 @@ handle_cast({log,Term},State = #logger_state{
 		     end
 	end}.
 
-
 terminate(_Reason,#logger_state{log = L})->
 	disk_log:close(L).
+
+%dummy callbacks, these aren't intended to be used yet
+code_change(_OldVsn,State,_Extra)->{ok,State}.
+handle_call(_Req,_From,State)->{noreply,State}.
+handle_info(_Info,State)->{noreply,State}.
+
 
 time_in_millis()-> {Megas,Seconds,Micros} = now(),
 		   Megas*1000000000+Seconds*1000+round(Micros/1000).
@@ -138,11 +147,12 @@ correct_content_test()->
 correct_no_files_test()->
 	start(),
 	ForeachFile = fun(F) -> 
-		      	    {ok,Files} = file:list_dir_all("log"),
+		      	    {ok,Files} = file:list_dir_all(?LOG_PATH),
 			    lists:map(F,Files)
 		      end,
-	ForeachFile(fun(File)->ok = file:rename("log/"++File,
-						"log/OLD"++File) end),
+	ForeachFile(fun(File)->ok = file:rename(?LOG_PATH++File,
+						?LOG_PATH++"OLD"++File) 
+		    end),
 	gen_server:cast(logger,oplog_on),
 	end_current_log(),
 	gen_server:cast(logger,oplog_on),
@@ -154,10 +164,10 @@ correct_no_files_test()->
 	ForeachFile(fun(File) -> 
 			      case File of
 			      	      "OLD" ++ File2 ->
-				      	    file:rename("log/"++File,
-							"log/"++File2),
+				      	    file:rename(?LOG_PATH++File,
+							?LOG_PATH++File2),
 					    false;
-				      _ -> ok = file:delete("log/"++File),
+				      _ -> ok = file:delete(?LOG_PATH++File),
 				      	   true
 			      end
 		    end)))==3.

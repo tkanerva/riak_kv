@@ -169,21 +169,23 @@ handle_query_results(ReturnTerms, MaxResults,  {ok, Results}, State) ->
 
 query_params(#rpbindexreq{index=Index= <<"$bucket">>,
                           term_regex=Re, max_results=MaxResults,
-                          continuation=Continuation}) ->
+                          continuation=Continuation, return_body=ReturnBody}) ->
     [{field, Index},
      {return_terms, false}, {term_regex, Re},
-     {max_results, MaxResults}, {continuation, Continuation}];
+     {max_results, MaxResults}, {continuation, Continuation},
+     {return_body, ReturnBody}];
 query_params(#rpbindexreq{qtype=eq, index=Index, key=Value,
                           term_regex=Re, max_results=MaxResults,
-                          continuation=Continuation}) ->
+                          continuation=Continuation, return_body=ReturnBody}) ->
     [{field, Index}, {start_term, Value}, {end_term, Value}, {term_regex, Re},
-     {max_results, MaxResults}, {return_terms, false}, {continuation, Continuation}];
+     {max_results, MaxResults}, {return_terms, false}, {continuation, Continuation},
+     {return_body, ReturnBody}];
 query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
                           term_regex=Re, max_results=MaxResults,
-                          continuation=Continuation}) ->
+                          continuation=Continuation, return_body=ReturnBody}) ->
      [{field, Index}, {start_term, Min}, {end_term, Max},
       {term_regex, Re}, {max_results, MaxResults},
-      {continuation, Continuation}].
+      {continuation, Continuation}, {return_body, ReturnBody}].
 
 encode_results(true, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],

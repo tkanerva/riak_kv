@@ -200,7 +200,7 @@ encode_results(false, false, Results, Continuation) ->
     #rpbindexresp{keys=JustTheKeys, continuation=Continuation}.
 
 encode_result({o, K, V}) ->
-    encode_result({K, V});
+    riak_pb_kv_codec:encode_pair({K, V});
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
     riak_pb_kv_codec:encode_index_pair({V1, K});

@@ -145,7 +145,7 @@ maybe_perform_query({ok, Query}, Req, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults,
                  return_terms=ReturnTerms0, timeout=Timeout,
                  pagination_sort=PgSort0, continuation=Continuation,
-                 cover_context=Cover} = Req,
+                 return_body=ReturnBody, cover_context=Cover} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     PgSort = case Continuation of
@@ -157,14 +157,14 @@ maybe_perform_query({ok, Query}, Req, State) ->
     Opts = maybe_add_cover(Cover, Opts1),
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
     QueryResult = Client:get_index(Bucket, Query, Opts),
-    handle_query_results(ReturnTerms, MaxResults, QueryResult , State).
+    handle_query_results(ReturnBody, ReturnTerms, MaxResults, QueryResult , State).
 
 
-handle_query_results(_, _, {error, Reason}, State) ->
+handle_query_results(_, _, _, {error, Reason}, State) ->
     {error, {format, Reason}, State};
-handle_query_results(ReturnTerms, MaxResults,  {ok, Results}, State) ->
+handle_query_results(ReturnBody, ReturnTerms, MaxResults,  {ok, Results}, State) ->
     Cont = make_continuation(MaxResults, Results, length(Results)),
-    Resp = encode_results(ReturnTerms, Results, Cont),
+    Resp = encode_results(ReturnBody, ReturnTerms, Results, Cont),
     {reply, Resp, State}.
 
 query_params(#rpbindexreq{index=Index= <<"$bucket">>,
@@ -187,13 +187,20 @@ query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
       {term_regex, Re}, {max_results, MaxResults},
       {continuation, Continuation}, {return_body, ReturnBody}].
 
-encode_results(true, Results0, Continuation) ->
+%% First two arguments are return_body and return_terms. They are
+%% mutually exclusive
+encode_results(false, true, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
     #rpbindexresp{results=Results, continuation=Continuation};
-encode_results(_, Results, Continuation) ->
+encode_results(true, false, Results0, Continuation) ->
+    Results = [encode_result(Res) || Res <- Results0],
+    #rpbindexresp{results=Results, continuation=Continuation};
+encode_results(false, false, Results, Continuation) ->
     JustTheKeys = filter_values(Results),
     #rpbindexresp{keys=JustTheKeys, continuation=Continuation}.
 
+encode_result({o, K, V}) ->
+    encode_result({K, V});
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
     riak_pb_kv_codec:encode_index_pair({V1, K});
@@ -227,10 +234,11 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {results, Results}}, ReqId, State=#state{req_id=ReqId, req=Req, result_count=Count}) ->
-    #rpbindexreq{return_terms=ReturnTerms, max_results=MaxResults} = Req,
+    #rpbindexreq{return_body=ReturnBody, return_terms=ReturnTerms,
+                 max_results=MaxResults} = Req,
     Count2 = length(Results) + Count,
     Continuation = make_continuation(MaxResults, Results, Count2),
-    Response = encode_results(ReturnTerms, Results, undefined),
+    Response = encode_results(ReturnBody, ReturnTerms, Results, undefined),
     {reply, Response, State#state{continuation=Continuation, result_count=Count2}};
 process_stream({ReqId, Error}, ReqId, State=#state{req_id=ReqId}) ->
     {error, {format, Error}, State#state{req_id=undefined}};

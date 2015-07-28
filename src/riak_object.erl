@@ -1014,21 +1014,18 @@ new_v1(Vclock, Siblings) ->
     VclockBin = term_to_binary(Vclock),
     VclockLen = byte_size(VclockBin),
     SibCount = length(Siblings),
-    SibsBin = bin_contents(Siblings),
-    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
+
+    SibsBin = [bin_content(Sib) || Sib <- Siblings],
+    [<<?MAGIC:8/integer, ?V1_VERS:8/integer, 
+        VclockLen:32/integer>>, VclockBin, 
+        <<SibCount:32/integer>>, SibsBin].
 
 bin_content(#r_content{metadata=Meta, value=Val}) ->
     ValBin = encode_maybe_binary(Val),
-    ValLen = byte_size(ValBin),
+    ValLen = iolist_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
-    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
-
-bin_contents(Contents) ->
-    F = fun(Content, Acc) ->
-                <<Acc/binary, (bin_content(Content))/binary>>
-        end,
-    lists:foldl(F, <<>>, Contents).
+    [<<ValLen:32/integer>>, ValBin, <<MetaLen:32/integer>>, MetaBin].
 
 meta_bin(MD) ->
     {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
@@ -1057,16 +1054,27 @@ fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
 fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
-    ValueBin = encode_maybe_binary(Value),
+    ValueBin = encode_maybe_binary_meta(Value),
     ValueLen = byte_size(ValueBin),
-    KeyBin = encode_maybe_binary(Key),
+    KeyBin = encode_maybe_binary_meta(Key),
     KeyLen = byte_size(KeyBin),
-    MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
-    {Elems, <<RestBin/binary, MetaBin/binary>>}.
+    % for now append metadata as a binary
+    MetaBin = 
+        <<RestBin/binary, 
+            KeyLen:32/integer, KeyBin/binary,
+            ValueLen:32/integer, ValueBin/binary>>,
+    {Elems, MetaBin}.
 
+%% encoding a term which maybe a binary to an IO list
 encode_maybe_binary(Bin) when is_binary(Bin) ->
-    <<1, Bin/binary>>;
+    [<<1:8>>, Bin];
 encode_maybe_binary(Bin) ->
+    [<<0:8>>, term_to_binary(Bin)].
+
+
+encode_maybe_binary_meta(Bin) when is_binary(Bin) ->
+    <<1, Bin/binary>>;
+encode_maybe_binary_meta(Bin) ->
     <<0, (term_to_binary(Bin))/binary>>.
 
 decode_maybe_binary(<<1, Bin/binary>>) ->

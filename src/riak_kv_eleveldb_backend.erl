@@ -197,7 +197,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
     Updates2 = lists:flatmap(F, IndexSpecs),
 
     %% Perform the write...
-    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
+    case eleveldb:iowrite(Ref, Updates1 ++ Updates2, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->

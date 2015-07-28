@@ -2253,7 +2253,7 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
         false ->
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
-            BinSize = size(EncodedVal),
+            BinSize = iolist_size(EncodedVal),
             %% Report or fail on large objects
             case DoMaxCheck andalso
                  BinSize > app_helper:get_env(riak_kv, max_object_size) of

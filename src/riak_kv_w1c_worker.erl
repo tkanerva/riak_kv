@@ -107,7 +107,7 @@ put(RObj, Options) ->
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,
                  #rec{w=W, pw=PW, n_val=NVal, from=self(),
                       start_ts=StartTS,
-                      size=size(EncodedVal)}}),
+                      size=iolist_size(EncodedVal)}}),
             Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
                           N when is_integer(N) andalso N > 0 ->
                               N;

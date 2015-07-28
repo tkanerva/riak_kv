@@ -1582,8 +1582,8 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        do_max_check) of
-        {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+        {{ok, UpdModState}, _EncodedVal} ->
+            update_hashtree(Bucket, Key, Obj, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX(Obj, put, Idx),
             case RB of
@@ -2048,6 +2048,9 @@ update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
     ok;
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
+    update_hashtree(Bucket, Key, RObj, State);
+update_hashtree(Bucket, Key, [H|_] = BinObj, State) when is_binary(H) ->
+    RObj = riak_object:from_binary(Bucket, Key, iolist_to_binary(BinObj)),
     update_hashtree(Bucket, Key, RObj, State);
 update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees}) ->
     Items = [{object, {Bucket, Key}, RObj}],

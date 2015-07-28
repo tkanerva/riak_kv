@@ -785,7 +785,7 @@ diff_specs_core(AllIndexSet, OldIndexSet) ->
 -spec index_data(riak_object()) -> [{binary(), index_value()}].
 index_data(undefined) ->
     [];
-index_data(Obj) ->
+index_data(#r_object{} = Obj) ->
     MetaDatas = get_metadatas(Obj),
     lists:flatten([dict:fetch(?MD_INDEX, MD)
                    || MD <- MetaDatas,

@@ -4,8 +4,9 @@
 	 log/1,
 	 correct_content_test/0,
 	 correct_no_files_test/0,
-	 duration_works_test/0]).
--export([init/1,handle_cast/2,terminate/2]).
+	 duration_works_test/0,
+	 start_link/0]).
+-export([init/1,handle_cast/2,terminate/2,code_change/3,handle_call/3,handle_info/2]).
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
@@ -129,10 +130,8 @@ time_in_millis()-> {Megas,Seconds,Micros} = now(),
 
 start()->
 	gen_server:start(logger,no_args,[]).
-%Docs and my version of erlang disagree, maybe change on surface?
-stop()->gen_server:system_terminate(no_reason,no_parent,no_debug,
-			[logger,"No idea, shutdown came from outside",
-			logger,no_time]).
+start_link()->
+	gen_server:start_link(logger,no_args,[]).
 correct_content_test()->
 	start(),
 	gen_server:cast(logger,oplog_on),

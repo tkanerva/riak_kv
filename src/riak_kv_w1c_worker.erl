@@ -101,7 +101,8 @@ put(RObj, Options) ->
             RObj4 = riak_object:apply_updates(RObj3),
             Bucket = riak_object:bucket(RObj4),
             Key = riak_object:key(RObj4),
-            EncodedVal = riak_object:to_binary(v1, RObj4),
+            % TODO eleveldb async_put does not handle IO lists yet
+            EncodedVal = iolist_to_binary(riak_object:to_binary(v1, RObj4)),
             gen_server:cast(
                 Worker,
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,

@@ -172,10 +172,8 @@ equal2(Obj1,Obj2) ->
 equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
-equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
-    MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
-    (MD1 =:= MD2)
+equal_contents([C1|R1],[C2|R2]) ->  
+    compare_metadata(C1, C2)
         andalso (C1#r_content.value =:= C2#r_content.value)
         andalso equal_contents(R1,R2).
 

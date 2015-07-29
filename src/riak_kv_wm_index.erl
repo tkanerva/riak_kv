@@ -206,43 +206,49 @@ malformed_request(RD, Ctx) ->
     case {PgSort,
           ReturnTerms1,
           ReturnBody,
+          ReturnBody andalso not riak_index:is_system_index(IndexField),
           validate_timeout(Timeout0),
           MaxVal,
           QRes,
           ValRe} of
-        {malformed, _, _, _, _, _, _} ->
+        {malformed, _, _, _, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_PAGINATION_SORT, PgSort0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, malformed, _, _, _, _, _} ->
+        {_, malformed, _, _, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, malformed, _, _, _, _} ->
+        {_, _, malformed, _, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNBODY, ReturnBody0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
+        {_, _, _, true, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("For return_body=true index must be one of ~p", [riak_index:system_index_list()]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
          when is_integer(NormStart) ->
             {true,
              wrq:set_resp_body("Can not use term regular expressions"
                                " on integer queries",
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, _, _, _, {error, ReError}} ->
+        {_, _, _, _, _, _, _, {error, ReError}} ->
             {true,
              wrq:set_resp_body(
                     io_lib:format("Invalid term regular expression ~p : ~p",
                                   [TermRegex, ReError]),
                     wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
+        {_, _, _, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
             ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
             %% Special case: a continuation implies pagination sort
@@ -261,19 +267,19 @@ malformed_request(RD, Ctx) ->
                        pagination_sort = PgSortFinal
                       },
             {false, RD, NewCtx};
-        {_, _, _, _, _, {error, Reason}, _} ->
+        {_, _, _, _, _, _, {error, Reason}, _} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, _, {false, BadVal}, _, _} ->
+        {_, _, _, _, _, {false, BadVal}, _, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, {error, Input}, _, _, _} ->
+        {_, _, _, _, {error, Input}, _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),

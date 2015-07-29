@@ -72,13 +72,16 @@ encode(Message) ->
 
 validate_request(#rpbindexreq{qtype=QType, key=SKey,
                               range_min=Min, range_max=Max,
-                              term_regex=TermRe} = Req) ->
+                              term_regex=TermRe, return_body=RB,
+                              index=Index} = Req) ->
     {ValRe, ValErr} = case TermRe of
         undefined ->
             {undefined, undefined};
         _ ->
             re:compile(TermRe)
     end,
+
+    IsSystemIndex = riak_index:is_system_index(Index),
 
     if
         QType == eq andalso not is_binary(SKey) ->
@@ -88,6 +91,8 @@ validate_request(#rpbindexreq{qtype=QType, key=SKey,
         ValRe =:= error ->
             {error, {format, "Invalid term regular expression ~p : ~p",
                      [TermRe, ValErr]}};
+        RB andalso not IsSystemIndex ->
+            {error, {format, "For return_body=true index must be one of ~p", [riak_index:system_index_list()]}};
         true ->
             Query = riak_index:to_index_query(query_params(Req)),
             case Query of

@@ -279,6 +279,7 @@ consistent_put_type(RObj, Options) ->
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    gen_server:cast(logger,oplog_on),
     logger:log(#log_entry{request=put_3,args=[RObj,Options,THIS]}),
     case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->

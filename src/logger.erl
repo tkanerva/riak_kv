@@ -17,8 +17,8 @@
 
 %1 GB
 -define(DEFAULT_LOG_SIZE,(1024*1024*1024)).
-%relative path from riak_kv/src to the log folder
--define(LOG_PATH,"../log/").
+%relative path to the log folder
+-define(LOG_PATH,"log/").
 
 %Non-genserver callbacks associated with the logger:
 -spec logging_is_on() -> boolean().
@@ -56,8 +56,7 @@ new_log(Size) ->
 				       /= {error,no_such_log}],
 	{ok,Log} = disk_log:open([
 		{name,logger_log},
-		{file,lists:flatten(io_lib:format(?LOG_PATH++
-						  "logger_log~p~p.log",
+		{file,?LOG_PATH ++ lists:flatten(io_lib:format("logger_log~p~p.log",
 						[Node,Time]))},
 		{type,halt},
 		{format,internal},

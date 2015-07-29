@@ -164,7 +164,7 @@ handle_query_results(_, _, _, {error, Reason}, State) ->
     {error, {format, Reason}, State};
 handle_query_results(ReturnBody, ReturnTerms, MaxResults,  {ok, Results}, State) ->
     Cont = make_continuation(MaxResults, Results, length(Results)),
-    Resp = encode_results(ReturnBody, ReturnTerms, Results, Cont),
+    Resp = encode_results(response_type(ReturnBody, ReturnTerms), Results, Cont),
     {reply, Resp, State}.
 
 query_params(#rpbindexreq{index=Index= <<"$bucket">>,
@@ -187,20 +187,31 @@ query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
       {term_regex, Re}, {max_results, MaxResults},
       {continuation, Continuation}, {return_body, ReturnBody}].
 
-%% First two arguments are return_body and return_terms. They are
-%% mutually exclusive
-encode_results(false, true, Results0, Continuation) ->
+%% Return `keys', `terms', or `objects' depending on the value of
+%% `return_terms' and `return_body'
+response_type(_, true) ->
+    objects;
+response_type(true, false) ->
+    terms;
+response_type(_, _) ->
+    keys.
+
+encode_results(objects, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
     #rpbindexresp{results=Results, continuation=Continuation};
-encode_results(true, false, Results0, Continuation) ->
+encode_results(terms, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
     #rpbindexresp{results=Results, continuation=Continuation};
-encode_results(false, false, Results, Continuation) ->
+encode_results(keys, Results, Continuation) ->
     JustTheKeys = filter_values(Results),
     #rpbindexresp{keys=JustTheKeys, continuation=Continuation}.
 
 encode_result({o, K, V}) ->
-    riak_pb_kv_codec:encode_pair({K, V});
+    %% Bucket is irrelevant and discarded, so we can make something up
+    %% when creating the `riak_object'
+    riak_pb_kv_codec:encode_pair(
+      {K, riak_object:get_value(
+            riak_object:from_binary(<<"bucket">>, K, V))});
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
     riak_pb_kv_codec:encode_index_pair({V1, K});
@@ -238,7 +249,7 @@ process_stream({ReqId, {results, Results}}, ReqId, State=#state{req_id=ReqId, re
                  max_results=MaxResults} = Req,
     Count2 = length(Results) + Count,
     Continuation = make_continuation(MaxResults, Results, Count2),
-    Response = encode_results(ReturnBody, ReturnTerms, Results, undefined),
+    Response = encode_results(response_type(ReturnBody, ReturnTerms), Results, undefined),
     {reply, Response, State#state{continuation=Continuation, result_count=Count2}};
 process_stream({ReqId, Error}, ReqId, State=#state{req_id=ReqId}) ->
     {error, {format, Error}, State#state{req_id=undefined}};

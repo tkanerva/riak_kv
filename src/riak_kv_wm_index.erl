@@ -206,7 +206,7 @@ malformed_request(RD, Ctx) ->
     case {PgSort,
           ReturnTerms1,
           ReturnBody,
-          ReturnBody andalso not riak_index:is_system_index(IndexField),
+          ReturnBody =:= true andalso not riak_index:is_system_index(IndexField),
           validate_timeout(Timeout0),
           MaxVal,
           QRes,

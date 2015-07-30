@@ -10,10 +10,12 @@
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
--record(logger_state,{log_end_time=infinity, %in milliseconds
-		      log=no_log,
-		      is_logging=false}).
--record(oplog_on_request,{size,duration,salt}).
+-record(logger_state,{log_end_time=infinity :: pos_integer() | atom(), %in milliseconds
+		      log=no_log :: atom(),
+		      is_logging=false :: boolean()}).
+-record(oplog_on_request,{size :: pos_integer(),
+			  duration :: non_neg_integer() | atom(),
+                          salt}).
 
 %1 GB
 -define(DEFAULT_LOG_SIZE,(1024*1024*1024)).
@@ -21,16 +23,22 @@
 -define(LOG_PATH,"log/").
 
 %Non-genserver callbacks associated with the logger:
--spec logging_is_on() -> boolean().
+-spec logging_is_on()-> boolean().
 logging_is_on()->ets:lookup(logger_state_ets,is_logging)==[{is_logging,true}].
+-spec set_logging_is_on(boolean())-> true.
 set_logging_is_on(Bool)->ets:insert(logger_state_ets,{is_logging,Bool}).
+-spec log(any())-> ok.
 log(Term)->
 	gen_server:cast(logger,{log,Term}).
+
+%This is a bit of a hack, should I add a new oplog_off request?
+-spec end_current_log()-> ok.
 end_current_log()->
 	gen_server:cast(logger,#oplog_on_request{duration=0}).
 
 %Each node has a log, so it doesn't need to be in distributed mode
 %Is logger too generic a name for the module & process?
+-spec init(any())-> {ok,#logger_state{}}.
 init(_) ->
 	case whereis(logger) of
 	     undefined -> 
@@ -49,7 +57,8 @@ init(_) ->
 %First call to oplog on opens new log, even w/o args
 %Log name internal to genserver.
 %Does not take salt as argument for now.
-new_log(Size) ->
+-spec new_log(pos_integer())-> atom().
+new_log(Size)->
 	Time = now(), %not too important exactly when it was opened?
 	Node = node(),
 	[disk_log:close(logger_log) || disk_log:info(logger_log) 
@@ -64,10 +73,15 @@ new_log(Size) ->
 		{size,Size}
 		      ]),
 	Log.
-disk_log(Log,Term) -> ok = disk_log:log(Log,Term).
+
+-spec disk_log(atom(),term())->ok.
+disk_log(Log,Term)-> ok = disk_log:log(Log,Term).
 
 %logger will likely crash upon log filling up, will supervisor manage that?
-handle_cast(oplog_on,State) ->
+-spec handle_cast(oplog_on | #oplog_on_request{} | oplog_off | {log,term()},
+                  #logger_state{})->
+                  {noreply,#logger_state{}}.
+handle_cast(oplog_on,State)->
 	set_logging_is_on(true),
 	{noreply,State#logger_state{is_logging=true,
 				    log=case State#logger_state.log of
@@ -92,7 +106,6 @@ handle_cast(#oplog_on_request{size=Size,duration=Millis},State)->
 		  	is_logging = true
 	     	        }
 	end};
-handle_cast(dbg,State)->io:format("~p",[State]),{noreply,State};
 handle_cast(oplog_off,State)->
 	set_logging_is_on(false),
 	{noreply,State#logger_state{is_logging=false}};
@@ -119,18 +132,25 @@ terminate(_Reason,#logger_state{log = L})->
 	disk_log:close(L).
 
 %dummy callbacks, these aren't intended to be used yet
+-spec code_change(term(),#logger_state{},term())->{ok,#logger_state{}}.
 code_change(_OldVsn,State,_Extra)->{ok,State}.
+-spec handle_call(term(),term(),#logger_state{})->{noreply,#logger_state{}}.
 handle_call(_Req,_From,State)->{noreply,State}.
+-spec handle_info(term(),#logger_state{})-> {noreply,#logger_state{}}.
 handle_info(_Info,State)->{noreply,State}.
 
-
+-spec time_in_millis()-> non_neg_integer().
 time_in_millis()-> {Megas,Seconds,Micros} = now(),
 		   Megas*1000000000+Seconds*1000+round(Micros/1000).
 
+-spec start()-> ignore | {error,term()} | {ok,pid()}.
 start()->
 	gen_server:start(logger,no_args,[]).
+-spec start_link() -> ignore | {error,term()} | {ok,pid()}.
 start_link()->
 	gen_server:start_link(logger,no_args,[]).
+
+-spec correct_content_test()-> boolean().
 correct_content_test()->
 	start(),
 	gen_server:cast(logger,oplog_on),
@@ -142,6 +162,7 @@ correct_content_test()->
 	{{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
 	Log_Contents == [alice,bob].
 
+-spec correct_no_files_test()-> boolean().
 correct_no_files_test()->
 	start(),
 	ForeachFile = fun(F) -> 
@@ -169,6 +190,8 @@ correct_no_files_test()->
 				      	   true
 			      end
 		    end)))==3.
+
+-spec duration_works_test()-> boolean().
 duration_works_test()->
 	start(),
 	gen_server:cast(logger,#oplog_on_request{size = ?DEFAULT_LOG_SIZE,

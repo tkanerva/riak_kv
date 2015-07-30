@@ -54,7 +54,7 @@
 %All put/N functions other than put/3 map to put/3
 %Currently no need for request field, but I'll keep it in
 %for later
--record(log_entry,{timestamp = now(),request,args}).
+-record(log_entry,{timestamp = now(),request :: atom(),args :: list(term())}).
 
 %% TODO: This type needs to be better specified and validated against
 %%       any dependents on riak_kv.

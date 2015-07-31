@@ -482,7 +482,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
 %% `return_terms' and `return_body'
 response_type(_, true) ->
     objects;
-response_type(true, false) ->
+response_type(true, _) ->
     terms;
 response_type(_, _) ->
     keys.

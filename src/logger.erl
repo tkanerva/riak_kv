@@ -177,7 +177,9 @@ start()->
 start_link()->
     gen_server:start_link({local,logger},logger,no_args,[]).
 
--spec correct_content_test()-> boolean().
+%TODO: Rewrite tests (I've changed log/1 to check logger_state_ets to see 
+%whether it shld run, which means that the ets causes a lag between turning
+%logging on/off & log/1 recognizing that)
 correct_content_test()->
     start(),
     gen_server:cast(logger,oplog_on),
@@ -189,7 +191,6 @@ correct_content_test()->
     {{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
     Log_Contents == [alice,bob].
 
--spec correct_no_files_test()-> boolean().
 correct_no_files_test()->
     start(),
     ForeachFile = fun(F) -> 
@@ -220,7 +221,6 @@ correct_no_files_test()->
 		       )
 	  )==3.
 
--spec duration_works_test()-> boolean().
 duration_works_test()->
     start(),
     gen_server:cast(logger,#oplog_on_request{size = ?DEFAULT_LOG_SIZE,

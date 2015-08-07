@@ -1,7 +1,7 @@
 -module(logger).
 -behaviour(gen_server).
 -export([logging_is_on/0,
-	 log/1,
+	 log_action/4,
 	 correct_content_test/0,
 	 correct_no_files_test/0,
 	 duration_works_test/0,
@@ -12,10 +12,20 @@
 %TODO put records in suitable header
 -record(logger_state,{log_end_time=infinity :: pos_integer() | atom(), %in milliseconds
 		      log=no_log :: atom(),
+		      hash_key, %undefined means no hashing
 		      is_logging=false :: boolean()}).
 -record(oplog_on_request,{size :: pos_integer(),
 			  duration :: non_neg_integer() | atom(),
                           salt}).
+-record(log_entry,{timestamp  = now(),
+		   bucket,
+		   key,
+		   action :: write | read | delete,
+		   index_vals :: {any(),any()} | {},
+		   val_size :: non_neg_integer(),
+		   compressibility :: pos_integer()
+		  }).
+
 
 %1 GB
 -define(DEFAULT_LOG_SIZE,(1024*1024*1024)).
@@ -27,9 +37,26 @@
 logging_is_on()->ets:lookup(logger_state_ets,is_logging)==[{is_logging,true}].
 -spec set_logging_is_on(boolean())-> true.
 set_logging_is_on(Bool)->ets:insert(logger_state_ets,{is_logging,Bool}).
+
+
+log_action(Bucket,Key,Action,Index_vals)->
+    log(#log_entry{
+	   bucket = Bucket,
+	   key = Key,
+	   action = Action,
+	   index_vals = Index_vals
+	  }).
+
+%this is the basic logging function.
+%all other logging functions should call this
 -spec log(any())-> ok.
 log(Term)->
-    gen_server:cast(logger,{log,Term}).
+    case logging_is_on() of
+	true -> 
+	    gen_server:cast(logger,{log,Term});
+	false ->
+	    ok
+    end.
 
 %This is a bit of a hack, should I add a new oplog_off request?
 -spec end_current_log()-> ok.

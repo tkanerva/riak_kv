@@ -51,11 +51,6 @@
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_ERRTOL, 0.00003).
 
-%All put/N functions other than put/3 map to put/3
-%Currently no need for request field, but I'll keep it in
-%for later
--record(log_entry,{timestamp = now(),request :: atom(),args :: list(term())}).
-
 %% TODO: This type needs to be better specified and validated against
 %%       any dependents on riak_kv.
 %%
@@ -278,9 +273,11 @@ consistent_put_type(RObj, Options) ->
 %%       {error, Err :: term()} |
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
+%Robj = {r_object, ...} will break if layout of #r_object{} changes
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    {r_object,Bucket,Key,_,_,_,_} = RObj,
     gen_server:cast(logger,oplog_on),
-    logger:log(#log_entry{request=put_3,args=[RObj,Options,THIS]}),
+    logger:log_action(Bucket,Key,write,{}), %ix vals?
     case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->
             consistent_put(RObj, Options, THIS);
@@ -298,9 +295,8 @@ put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
 %% @doc Store RObj in the cluster.
 %%      Return as soon as at least W nodes have received the request.
 %% @equiv put(RObj, [{w, W}, {dw, W}])
-put(RObj, W, {?MODULE, [_Node, _ClientId]}=THIS) -> 
-	  logger:log(#log_entry{request=put_3,args=[RObj,W,THIS]}),
-	  put(RObj, [{w, W}, {dw, W}], THIS).
+put(RObj, W, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, W}], THIS).
 
 %% @spec put(RObj::riak_object:riak_object(),W :: integer(),RW :: integer(), riak_client()) ->
 %%        ok |

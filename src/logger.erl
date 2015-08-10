@@ -2,11 +2,14 @@
 -behaviour(gen_server).
 -export([logging_is_on/0,
 	 log_action/4,
-	 correct_content_test/0,
-	 correct_no_files_test/0,
-	 duration_works_test/0,
-	 start_link/0]).
+	 start_link/0,
+	 end_current_log/0]).
 -export([init/1,handle_cast/2,terminate/2,code_change/3,handle_call/3,handle_info/2]).
+-ifdef(TEST).
+-export([correct_content_test/0,
+	 correct_no_files_test/0,
+	 duration_works_test/0]).
+-endif.
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
@@ -170,28 +173,32 @@ handle_info(_Info,State)->{noreply,State}.
 time_in_millis()-> {Megas,Seconds,Micros} = now(),
 		   Megas*1000000000+Seconds*1000+round(Micros/1000).
 
--spec start()-> ignore | {error,term()} | {ok,pid()}.
-start()->
-    gen_server:start(logger,no_args,[]).
 -spec start_link() -> ignore | {error,term()} | {ok,pid()}.
 start_link()->
     gen_server:start_link({local,logger},logger,no_args,[]).
 
 %TODO: Rewrite tests (I've changed log/1 to check logger_state_ets to see 
 %whether it shld run, which means that the ets causes a lag between turning
-%logging on/off & log/1 recognizing that)
-correct_content_test()->
-    start(),
-    gen_server:cast(logger,oplog_on),
-    log(alice),
-    log(bob),
-    gen_server:cast(logger,oplog_off),
-    log(charles),
-    timer:sleep(100),
-    {{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
-    Log_Contents == [alice,bob].
+%logging on/off & log/1 recognizing that). 
+-ifdef(TEST).
+-spec start()-> ignore | {error,term()} | {ok,pid()}.
+start()->
+    gen_server:start(logger,no_args,[]).
+correct_content_test()-> 
+    fun()-> 
+	    start(),
+	    gen_server:cast(logger,oplog_on),
+	    log(alice),
+	    log(bob),
+	    gen_server:cast(logger,oplog_off),
+	    log(charles),
+	    timer:sleep(100),
+	    {{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
+	    Log_Contents == [alice,bob] 
+    end, %fun() -> expr end = hacky multi-line comment.
+    true.
 
-correct_no_files_test()->
+correct_no_files_test()-> fun() ->
     start(),
     ForeachFile = fun(F) -> 
 			  {ok,Files} = file:list_dir_all(?LOG_PATH),
@@ -219,9 +226,11 @@ correct_no_files_test()->
 					    end
 				    end)
 		       )
-	  )==3.
+	  )==3 
+			  end, true.
+			  
 
-duration_works_test()->
+duration_works_test()-> fun()
     start(),
     gen_server:cast(logger,#oplog_on_request{size = ?DEFAULT_LOG_SIZE,
 					     duration=1}),
@@ -229,4 +238,6 @@ duration_works_test()->
     eof=disk_log:chunk(logger_log,start),
     log(value),%this should close log
     timer:sleep(100),
-    {error,no_such_log} == disk_log:info(logger_log).
+    {error,no_such_log} == disk_log:info(logger_log)
+			   end, true.
+-endif.

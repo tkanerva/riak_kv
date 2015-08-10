@@ -4,16 +4,20 @@
 	 log_action/4,
 	 start_link/0,
 	 end_current_log/0]).
--export([init/1,handle_cast/2,terminate/2,code_change/3,handle_call/3,handle_info/2]).
+-export([init/1,handle_cast/2,terminate/2,code_change/3,
+	 handle_call/3,handle_info/2]).
 -ifdef(TEST).
+-ifdef(TODO_FIX_TESTS).
 -export([correct_content_test/0,
 	 correct_no_files_test/0,
 	 duration_works_test/0]).
 -endif.
+-endif.
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
--record(logger_state,{log_end_time=infinity :: pos_integer() | atom(), %in milliseconds
+-record(logger_state,{log_end_time=infinity :: pos_integer() | atom(), 
+						%in milliseconds
 		      log=no_log :: atom(),
 		      hash_key, %undefined means no hashing
 		      is_logging=false :: boolean()}).
@@ -91,11 +95,14 @@ init(_) ->
 new_log(Size)->
     Time = now(), %not too important exactly when it was opened?
     Node = node(),
-    [disk_log:close(logger_log) || disk_log:info(logger_log) /= {error,no_such_log}],
+    [disk_log:close(logger_log) || disk_log:info(logger_log) /=
+				       {error,no_such_log}],
     {ok,Log} = disk_log:open([
 			      {name,logger_log},
-			      {file,?LOG_PATH ++ lists:flatten(io_lib:format("logger_log~p~p.log",
-									     [Node,Time]))},
+			      {file,?LOG_PATH ++ 
+				   lists:flatten(io_lib:format(
+						   "logger_log~p~p.log",
+						   [Node,Time]))},
 			      {type,halt},
 			      {format,internal},
 			      {mode,read_write},
@@ -181,24 +188,23 @@ start_link()->
 %whether it shld run, which means that the ets causes a lag between turning
 %logging on/off & log/1 recognizing that). 
 -ifdef(TEST).
+
+-ifdef(TODO_FIX_TESTS).
 -spec start()-> ignore | {error,term()} | {ok,pid()}.
 start()->
     gen_server:start(logger,no_args,[]).
 correct_content_test()-> 
-    fun()-> 
-	    start(),
-	    gen_server:cast(logger,oplog_on),
-	    log(alice),
-	    log(bob),
-	    gen_server:cast(logger,oplog_off),
-	    log(charles),
-	    timer:sleep(100),
-	    {{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
-	    Log_Contents == [alice,bob] 
-    end, %fun() -> expr end = hacky multi-line comment.
-    true.
+    start(),
+    gen_server:cast(logger,oplog_on),
+    log(alice),
+    log(bob),
+    gen_server:cast(logger,oplog_off),
+    log(charles),
+    timer:sleep(100),
+    {{continuation,_,_,_},Log_Contents} = disk_log:chunk(logger_log,start),
+    Log_Contents == [alice,bob] .
 
-correct_no_files_test()-> fun() ->
+correct_no_files_test()->
     start(),
     ForeachFile = fun(F) -> 
 			  {ok,Files} = file:list_dir_all(?LOG_PATH),
@@ -219,18 +225,19 @@ correct_no_files_test()-> fun() ->
 					    case File of
 						"OLD" ++ File2 ->
 						    file:rename(?LOG_PATH++File,
-								?LOG_PATH++File2),
+								?LOG_PATH++
+								    File2),
 						    false;
-						_ -> ok = file:delete(?LOG_PATH++File),
+						_ -> ok = file:delete(?LOG_PATH
+								      ++File),
 						     true
 					    end
 				    end)
 		       )
-	  )==3 
-			  end, true.
+	  )==3.
 			  
 
-duration_works_test()-> fun()
+duration_works_test()->
     start(),
     gen_server:cast(logger,#oplog_on_request{size = ?DEFAULT_LOG_SIZE,
 					     duration=1}),
@@ -238,6 +245,7 @@ duration_works_test()-> fun()
     eof=disk_log:chunk(logger_log,start),
     log(value),%this should close log
     timer:sleep(100),
-    {error,no_such_log} == disk_log:info(logger_log)
-			   end, true.
+    {error,no_such_log} == disk_log:info(logger_log).
+-endif.
+
 -endif.

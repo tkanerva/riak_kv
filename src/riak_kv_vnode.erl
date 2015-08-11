@@ -1631,11 +1631,12 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     end,
     {Reply, UpdState}.
 
+
 %% @private
 maybe_rewrite_li_key(RObj, Key) ->
-    case riak_object:is_li(RObj) of
-	true  -> riak_object:get_li_key(RObj);
-	false -> Key
+    case riak_object:value_count(RObj) == 1 andalso riak_object:is_li(RObj) of
+      true  -> riak_object:get_li_key(RObj);
+      false -> Key
     end.
 
 %% @private

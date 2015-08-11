@@ -26,7 +26,7 @@
 
 -export([new/2]).
 -export([get/3,get/4,get/5]).
--export([put/2,put/4]).
+-export([put/2,put/3,put/4,put/5,put/6]).
 -export([delete/3,delete/4,delete/5]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
@@ -191,8 +191,7 @@ get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when
 %% @equiv put(RObj, [])
 put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) ->
     BProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
-    put(RObj, [], BProps, THIS).
-
+    put_bprops(RObj, [], BProps, THIS).
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm:options(), riak_client()) ->
 %%       ok |
@@ -205,7 +204,71 @@ put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()} |
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
-put(RObj, Options, BProps, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options), is_list(BProps) ->
+put(RObj, Options, {?MODULE, _}=THIS) when is_list(Options) ->
+    BProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
+    put_bprops(RObj, Options, BProps, THIS);
+
+%% @spec put(RObj :: riak_object:riak_object(), W :: integer(), riak_client()) ->
+%%        ok |
+%%       {error, too_many_fails} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}}
+%% @doc Store RObj in the cluster.
+%%      Return as soon as at least W nodes have received the request.
+%% @equiv put(RObj, [{w, W}, {dw, W}])
+put(RObj, W, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, W}], THIS).
+
+%% @spec put(RObj::riak_object:riak_object(),W :: integer(),RW :: integer(), riak_client()) ->
+%%        ok |
+%%       {error, too_many_fails} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}}
+%% @doc Store RObj in the cluster.
+%%      Return as soon as at least W nodes have received the request, and
+%%      at least DW nodes have stored it in their storage backend.
+%% @equiv put(Robj, W, DW, default_timeout())
+put(RObj, W, DW, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, DW}], THIS).
+
+%% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
+%%           TimeoutMillisecs :: integer(), riak_client()) ->
+%%        ok |
+%%       {error, too_many_fails} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}}
+%% @doc Store RObj in the cluster.
+%%      Return as soon as at least W nodes have received the request, and
+%%      at least DW nodes have stored it in their storage backend, or
+%%      TimeoutMillisecs passes.
+put(RObj, W, DW, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}], THIS).
+
+%% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
+%%           TimeoutMillisecs :: integer(), Options::list(), riak_client()) ->
+%%        ok |
+%%       {error, too_many_fails} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}}
+%% @doc Store RObj in the cluster.
+%%      Return as soon as at least W nodes have received the request, and
+%%      at least DW nodes have stored it in their storage backend, or
+%%      TimeoutMillisecs passes.
+put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options], THIS).
+%% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm:options(), riak_client()) ->
+%%       ok |
+%%       {ok, details()} |
+%%       {ok, riak_object:riak_object()} |
+%%       {ok, riak_object:riak_object(), details()} |
+%%       {error, notfound} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}} |
+%%       {error, Err :: term()} |
+%%       {error, Err :: term(), details()}
+%% @doc Store RObj in the cluster.
+
+put_bprops(RObj, Options, BProps, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options), is_list(BProps) ->
     Is_consistent = consistent_object_bprops(Node, riak_object:bucket(RObj), BProps),
     Is_write_once = write_once_bprops(Node, riak_object:bucket(RObj), BProps),
     if

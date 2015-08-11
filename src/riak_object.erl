@@ -102,6 +102,7 @@
 -export([get_li_index/1, is_li/1, get_li_key/1]).
 -export([is_dvv_bprops/1]).
 -export([is_write_once_bprops/1]).
+-export([is_consistent_bprops/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -736,6 +737,9 @@ is_write_once_bprops(BProps) ->
     %% default, and typed should have `true` and `undefined` is not a
     %% valid return.
     proplists:get_value(dvv_enabled, BProps, true).
+
+is_consistent_bprops(BProps) ->
+    lists:member({consistent, true}, BProps).
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for

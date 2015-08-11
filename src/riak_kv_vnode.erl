@@ -1397,7 +1397,8 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime}) ->
+                             starttime=StartTime,
+                             bprops = BProps}) ->
 
     %% if this is a composite index write we need to change the key to be
     %% the key we will actually write into leveldb
@@ -1418,7 +1419,8 @@ prepare_put(State=#state{vnodeid=VId,
                         %% Do we need to use epochs here? I guess we
                         %% don't care, and since we don't read, we
                         %% can't.
-                        riak_object:increment_vclock(RObj, VId, StartTime);
+                        Is_dvv = riak_object:is_dvv_bprops(BProps),
+                        riak_object:increment_vclock(RObj, VId, StartTime, Is_dvv);
                     false ->
                         RObj
                 end,
@@ -1477,7 +1479,7 @@ prepare_put(State=#state{mod=Mod,
             end,
             %% local not found, start a per key epoch
             {EpochId, State2} = new_key_epoch(State),
-            case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
+            case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp, BProps) of
                 {error, E} ->
                     {{fail, Idx, E}, PutArgs, State2};
                 ObjToStore ->
@@ -1487,7 +1489,7 @@ prepare_put(State=#state{mod=Mod,
             end;
         {ok, OldObj} ->
             {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
+            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime, BProps) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs, State2};
                 {newobj, NewObj} ->
@@ -1526,15 +1528,19 @@ prepare_put(State=#state{mod=Mod,
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
 %% NOTE the `VId' is a new epoch actor for this object
-prepare_new_put(true, RObj, VId, StartTime, undefined) ->
-    riak_object:increment_vclock(RObj, VId, StartTime);
-prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+prepare_new_put(true, RObj, VId, StartTime, CRDTOp, BProps) ->
+    Is_dvv = riak_object:is_dvv_bprops(BProps),
+    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime, Is_dvv),
     %% coordinating a _NEW_ crdt operation means
     %% creating + updating the crdt.
     %% Make a new crdt, stuff it in the riak_object
-    do_crdt_update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+    case CRDTOp of
+        undefined ->
+           VClockUp;
+        _ ->
+            do_crdt_update(VClockUp, VId, CRDTOp)
+    end;
+prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp, _) ->
     %% @TODO Not coordindating, not found local, is there an entry for
     %% us in the clock? If so, mark as dirty
     RObj.
@@ -1659,13 +1665,13 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime, _) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime, BProps) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -1673,17 +1679,19 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    Is_dvv = riak_object:is_dvv_bprops(BProps),
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj, Is_dvv),
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
+put_merge(true, LWW, CurObj, UpdObj, VId, StartTime, BProps) ->
     %% @TODO If the current object has a dirty clock, we need to start
     %% a new per key epoch and mark clock as clean.
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
+    Is_dvv = riak_object:is_dvv_bprops(BProps),
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime, Is_dvv)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
@@ -2016,7 +2024,8 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
-            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
+            BProps = riak_core_bucket:get_bucket(Bucket),
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined, BProps) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->

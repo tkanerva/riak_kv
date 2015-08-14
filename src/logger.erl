@@ -16,13 +16,12 @@
 
 %TODO ask whether use of now() is suitable
 %TODO put records in suitable header
--record(logger_state,{log_end_time=infinity :: pos_integer() | atom(), 
-						%in milliseconds
+-record(logger_state,{end_log_ref = no_ref :: reference() | atom(),
 		      log=no_log :: atom(),
 		      hash_key, %undefined means no hashing
 		      is_logging=false :: boolean()}).
 -record(oplog_on_request,{size :: pos_integer(),
-			  duration :: non_neg_integer() | atom(),
+			  duration :: non_neg_integer() | infinity,
                           salt}).
 -record(log_entry,{timestamp  = now(),
 		   bucket,
@@ -39,11 +38,20 @@
 %relative path to the log folder
 -define(LOG_PATH,"log/").
 
-%Non-genserver callbacks associated with the logger:
+%An exception in lookup should mean that the logger_state_ets doesn't
+%yet exist. That should only be the case for a short time after
+%logger start or restart.
 -spec logging_is_on()-> boolean().
-logging_is_on()->ets:lookup(logger_state_ets,is_logging)==[{is_logging,true}].
--spec set_logging_is_on(boolean())-> true.
-set_logging_is_on(Bool)->ets:insert(logger_state_ets,{is_logging,Bool}).
+logging_is_on()->catch(ets:lookup(logger_state_ets,is_logging))
+		     ==[{is_logging,true}].
+-spec set_logging_is_on(boolean())-> ok.
+set_logging_is_on(Bool)->
+    try ets:insert(logger_state_ets,{is_logging,Bool}) of
+	_ -> ok
+    catch 
+	_ -> ets:new(logger_state_ets,[named_table,public]),
+	     ets:insert(logger_state_ets,{is_logging,Bool})
+    end.
 
 
 log_action(Bucket,Key,Action,Index_vals)->
@@ -74,17 +82,7 @@ end_current_log()->
 %Is logger too generic a name for the module & process?
 -spec init(any())-> {ok,#logger_state{}}.
 init(_) ->
-%	case whereis(logger) of
-%	     undefined -> 
-%	     	       register(logger,self()),
-    T = logger_state_ets,
-    [ets:new(T,[named_table]) || ets:info(T) == undefined],
-    set_logging_is_on(false),
-%	     _Pid  -> 
-%	       [end_current_log()
-%	       || whereis(logger) /= undefined] 
-	       %resets state if logger exists
-%	end,
+    self() ! make_a_new_ets,
     {ok,#logger_state{}}.
 
 %Opens a new log in response to oplog on <args>
@@ -125,60 +123,67 @@ handle_cast(oplog_on,State)->
 					no_log -> 
 					    new_log(?DEFAULT_LOG_SIZE);
 					L -> L end}};
-handle_cast(#oplog_on_request{size=Size,duration=Millis},State)->
+handle_cast(#oplog_on_request{size=Size,duration=Duration},State)->
     set_logging_is_on(true),
     case State#logger_state.log of
 	no_log -> ok;
 	L -> disk_log:close(L)
     end,
     {noreply,
-     case Millis > 0 of
-	 false -> 
-	     disk_log:close(logger_log),
+     case Duration > 0 of
+	 false ->
 	     #logger_state{};
-	 true -> 
+	 true ->  
 	     #logger_state{
-		log_end_time = time_in_millis() + Millis,
+		end_log_ref =
+		    case Duration of 
+			infinity -> no_ref;
+			_ -> Log_Id = make_ref(),
+			     erlang:send_after(Duration,self(),
+					       {scheduled_log_end,Log_Id}),
+			     Log_Id
+		    end,
 		log = new_log(Size),
 		is_logging = true
 	       }
      end};
 handle_cast(oplog_off,State)->
-    set_logging_is_on(false),
-    {noreply,State#logger_state{is_logging=false}};
-%Not using genserver would allow us to put timeout in receive clause,
-%avoiding the comparison of time_in_millis to log_end_time.
+    case set_logging_is_on(false) of
+	ok -> {noreply,State#logger_state{is_logging=false}};
+	error -> gen_server:cast(logger,oplog_off)
+    end;
 handle_cast({log,Term},State = #logger_state{
-				  log_end_time=End,
 				  log=L,
 				  is_logging=IL})->
     {noreply,
      case IL of
 	 false -> State;
 	 true -> 
-	     case time_in_millis() > End of
-		 true -> disk_log:close(L),
-			 #logger_state{};
-		 false -> 
-		     disk_log(L,Term),
-		     State
-	     end
+	     disk_log(L,Term),
+	     State
      end}.
 
 terminate(_Reason,#logger_state{})->
     ok. %disk log should close automatically here
 
-%these callbacks just empty mailbox of requests
 -spec code_change(term(),#logger_state{},term())->{ok,#logger_state{}}.
 code_change(_OldVsn,State,_Extra)->{ok,State}.
 -spec handle_call(term(),term(),#logger_state{})->{noreply,#logger_state{}}.
 handle_call(_Req,_From,State)->{noreply,State}.
 -spec handle_info(term(),#logger_state{})-> {noreply,#logger_state{}}.
+handle_info({scheduled_log_end,Log_Id},
+	    State = #logger_state{end_log_ref=LID,log=L})->
+    {noreply,
+     case Log_Id == LID of
+	 true -> disk_log:close(L),
+		 #logger_state{};
+	 false -> State
+     end};
+handle_info(make_a_new_ets,State)-> 
+    ets:new(logger_state_ets,[named_table]),
+    ok = set_logging_is_on(false),
+    {noreply,State};
 handle_info(_Info,State)->{noreply,State}.
-
--spec time_in_millis()-> non_neg_integer().
-time_in_millis()-> {Megas,Seconds,Micros} = now(),
-		   Megas*1000000000+Seconds*1000+round(Micros/1000).
 
 -spec start_link() -> ignore | {error,term()} | {ok,pid()}.
 start_link()->

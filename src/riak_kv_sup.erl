@@ -99,7 +99,7 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
-    Logger =  {logger,
+       Logger =  {logger,
                     {logger, start_link, []},
                     permanent, 30000, worker, [logger]},
 

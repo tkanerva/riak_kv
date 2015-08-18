@@ -52,6 +52,58 @@
 -export([aae_exchange_status/1,
          aae_repair_status/1,
          aae_tree_status/1]).
+%%riak-admin oplog calls
+-export([oplog_on_no_args/1,
+	 oplog_on_args/1,
+	 oplog_off/1,
+	 oplog_status/1]).
+%Need to do this once on every node
+oplog_on_no_args([])->
+    on_each_node(oplog_on_no_args,[local]);
+oplog_on_no_args(local)->
+    gen_server:call(logger,oplog_on).
+oplog_on_args([Salt,Size,Duration])->
+    Parse = fun(Str,DFLT)->
+		    case Str of 
+			"default" -> DFLT;
+			_ -> 
+			    case string:to_integer(Str) of
+				{error,Reason} -> error(Reason);
+				{Int,""} when Int >= 0-> Int;
+				{_Int,""} -> 
+				    error("Don't pass negative ints!");
+				{_,Remainder} -> 
+				    error(
+				      "Parse failed: " ++
+					  Remainder ++
+					  " remains!")
+			    end
+		    end
+	    end,
+    Si = Parse(Size,1024*1024*1024),
+    Dur = Parse(Duration,infinity),
+    Sal = Parse(Salt,no_salt),
+    on_each_node(oplog_on_args,[{local,Si,Dur,Sal}]);
+oplog_on_args({local,Si,Dur,Sal}) -> gen_server:call(logger,
+						     {oplog_on_request,
+						      Si,Dur,Sal}).
+oplog_off([])->
+    on_each_node(oplog_off,[local]);
+oplog_off(local)->
+    gen_server:call(logger,oplog_off).
+oplog_status([])->
+    Results = on_each_node(oplog_status,[local]),
+    [io:format(Result) || Result <- Results];
+oplog_status(local) ->
+    gen_server:call(logger,display_status).
+
+on_each_node(Fname,Args)->
+   {Results,_Badnodes} = 
+	riak_core_util:rpc_every_member(riak_kv_console,
+					Fname,
+					Args,
+					5000),
+    Results.
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,

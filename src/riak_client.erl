@@ -275,10 +275,17 @@ consistent_put_type(RObj, Options) ->
 %% @doc Store RObj in the cluster.
 %Robj = {r_object, ...} will break if layout of #r_object{} changes
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
-    {r_object,Bucket,Key,_,_,_,_} = RObj,%BAD! riak_object:get_metadatas
-    
-    gen_server:cast(logger,oplog_on),
-    logger:log_action(Bucket,Key,write,{}), %Add index_vals field
+    Bucket = riak_object:bucket(RObj),
+    Key = riak_object:key(RObj),
+    Vals = riak_object:get_values(RObj),
+    Index_vals = riak_object:index_data(RObj),
+    %Mdatas = riak_object:get_metadatas(RObj),
+    logger:log_action(Bucket,
+		      Key,
+		      write,
+		      Index_vals,
+		      size(term_to_binary(Vals)),
+		      comp), %todo record compressibility
     case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->
             consistent_put(RObj, Options, THIS);

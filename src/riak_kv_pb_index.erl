@@ -214,9 +214,7 @@ encode_results(keys, Results, Continuation) ->
 encode_result({o, K, V}) ->
     %% Bucket is irrelevant and discarded, so we can make something up
     %% when creating the `riak_object'
-    riak_pb_kv_codec:encode_pair(
-      {K, riak_object:get_value(
-            riak_object:from_binary(<<"bucket">>, K, V))});
+    riak_pb_kv_codec:encode_pair({K, V});
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
     riak_pb_kv_codec:encode_index_pair({V1, K});

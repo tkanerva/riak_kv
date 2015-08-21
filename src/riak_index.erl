@@ -500,7 +500,14 @@ make_continuation([]) ->
     undefined;
 make_continuation(L) ->
     Last = lists:last(L),
-    base64:encode(term_to_binary(Last)).
+    encode_continuation(Last).
+
+%% @doc Helper function for `make_continuation/1'; results can be
+%% either keys or full objects, and we only wish to encode the key
+encode_continuation({o, Key, _Body}) ->
+    encode_continuation(Key);
+encode_continuation(Key) ->
+    base64:encode(term_to_binary(Key)).
 
 %% @doc decode a continuation received from the outside world.
 -spec decode_continuation(continuation() | undefined) -> last_result() | undefined.

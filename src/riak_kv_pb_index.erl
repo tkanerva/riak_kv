@@ -214,7 +214,11 @@ encode_results(keys, Results, Continuation) ->
 encode_result({o, K, V}) ->
     %% Bucket is irrelevant and discarded, so we can make something up
     %% when creating the `riak_object'
-    riak_pb_kv_codec:encode_pair({K, V});
+    RObj = riak_object:from_binary(<<"bucket">>, K, V),
+    Contents  = riak_pb_kv_codec:encode_contents(riak_object:get_contents(RObj)),
+    VClock = riak_object:encode_vclock(riak_object:vclock(RObj)),
+    GetResp = #rpbgetresp{vclock=VClock, content=Contents},
+    riak_pb_kv_codec:encode_pair({K, riak_pb_codec:encode(GetResp)});
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
     riak_pb_kv_codec:encode_index_pair({V1, K});

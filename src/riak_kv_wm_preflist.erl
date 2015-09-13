@@ -115,11 +115,13 @@ forbidden(RD, Ctx) ->
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
+                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(
                              unicode:characters_to_binary(
                                Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->
+                    riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {false, RD, Ctx}
             end
     end.
@@ -169,6 +171,7 @@ produce_preflist_body(RD, #ctx{bucket=Bucket0,
     Json = mochijson2:encode({struct,
                               [{<<"preflist">>,
                                 lists:flatten(jsonify_preflist(Preflist))}]}),
+    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     {Json, RD, Ctx}.
 
 %% Private

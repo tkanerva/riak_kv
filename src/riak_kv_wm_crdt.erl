@@ -288,8 +288,10 @@ forbidden_check_security(RD, Ctx=#ctx{bucket_type=BType, bucket=Bucket,
     case riak_core_security:check_permission({Perm, {BType, Bucket}},
                                              SecContext) of
         {false, Error, _} ->
+            riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
             {true, error_response(Error, RD), Ctx};
         {true, _} ->
+            riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             forbidden_check_bucket_type(RD, Ctx)
     end.
 
@@ -357,8 +359,10 @@ resource_exists(RD, Ctx=#ctx{client=C, bucket_type=T, bucket=B, key=K, module=Mo
     Options = make_options(Ctx),
     case C:get({T,B}, K, [{crdt_op, Mod}|Options]) of
         {ok, O} ->
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx#ctx{data=O}};
         {error, Reason} ->
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, Ctx)
     end.
 
@@ -375,8 +379,10 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
                        {retry_put_coordinator_failure,false}|Options0],
             case C:put(O, Options) of
                 ok ->
+                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {true, RD, Ctx};
                 {ok, RObj} ->
+                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {Body, RD1, Ctx1} = produce_json(RD, Ctx#ctx{data=RObj}),
                     {true,
                      wrq:set_resp_body(Body, wrq:set_resp_header(
@@ -384,6 +390,7 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
                                                RD1)),
                      Ctx1};
                 {error, Reason} ->
+                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     handle_common_error(Reason, RD, Ctx)
             end
     end.

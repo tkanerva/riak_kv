@@ -144,9 +144,11 @@ forbidden(RD, Ctx) ->
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
+                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->
+                    riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {false, RD, Ctx}
             end
     end.
@@ -352,13 +354,14 @@ handle_streaming_index_query(RD, Ctx) ->
     Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
-    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
+    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0, RD, Ctx),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
+index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count, RD, Ctx) ->
     fun() ->
             receive
                 {ReqID, done} ->
+                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     Final = case make_continuation(MaxResults, [LastResult], Count) of
                                 undefined -> ["\r\n--", Boundary, "--\r\n"];
                                 Continuation ->
@@ -370,7 +373,7 @@ index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, L
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count, RD, Ctx)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
                     JsonResults = encode_results(ReturnTerms, Results),
@@ -380,10 +383,12 @@ index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, L
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
+                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1, RD, Ctx)};
                 {ReqID, Error} ->
+                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     stream_error(Error, Boundary)
             after Timeout ->
+                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
                     whack_index_fsm(ReqID, FSMPid),
                     stream_error({error, timeout}, Boundary)
             end
@@ -442,10 +447,12 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of
         {ok, Results} ->
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),
             {JsonResults, RD, Ctx};
         {error, timeout} ->
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
             {{halt, 503},
              wrq:set_resp_header("Content-Type", "text/plain",
                                  wrq:append_to_response_body(
@@ -453,6 +460,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
                                    RD)),
              Ctx};
         {error, Reason} ->
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             {{error, Reason}, RD, Ctx}
     end.
 

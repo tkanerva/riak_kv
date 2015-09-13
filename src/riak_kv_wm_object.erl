@@ -275,11 +275,14 @@ validate(RD, Ctx=#ctx{security=Security}) ->
 
 -spec maybe_validate_resource(term(), #wm_reqdata{}, context(), string()) -> term().
 maybe_validate_resource({false, Error, _}, RD, Ctx, _Perm) ->
+    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
     {true, wrq:append_to_resp_body(
              unicode:characters_to_binary(Error, utf8, utf8),
              RD1), Ctx};
+
 maybe_validate_resource({true, _}, RD, Ctx, Perm) ->
+    riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     validate_resource(RD, Ctx, Perm).
 
 -spec validate_resource(#wm_reqdata{}, context(), string()) -> term().
@@ -299,8 +302,10 @@ validate_doc(RD, Ctx) ->
     DocCtx = ensure_doc(Ctx),
     case DocCtx#ctx.doc of
         {error, Reason} ->
+            riak_kv_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, DocCtx);
         _ ->
+            riak_kv_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {false, RD, DocCtx}
     end.
 
@@ -756,10 +761,13 @@ accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, 
                end,
     case C:put(Doc, Options2) of
         {error, Reason} ->
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, Ctx);
         ok ->
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx#ctx{doc={ok, Doc}}};
         {ok, RObj} ->
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             DocCtx = Ctx#ctx{doc={ok, RObj}},
             HasSiblings = (select_doc(DocCtx) == multiple_choices),
             send_returnbody(RD, DocCtx, HasSiblings)
@@ -1017,8 +1025,10 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     end,
     case Result of
         {error, Reason} ->
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, Ctx);
         ok ->
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx}
     end.
 

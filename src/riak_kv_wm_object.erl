@@ -302,10 +302,10 @@ validate_doc(RD, Ctx) ->
     DocCtx = ensure_doc(Ctx),
     case DocCtx#ctx.doc of
         {error, Reason} ->
-            riak_kv_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, DocCtx);
         _ ->
-            riak_kv_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {false, RD, DocCtx}
     end.
 

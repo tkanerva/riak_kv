@@ -361,7 +361,7 @@ index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, L
     fun() ->
             receive
                 {ReqID, done} ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     Final = case make_continuation(MaxResults, [LastResult], Count) of
                                 undefined -> ["\r\n--", Boundary, "--\r\n"];
                                 Continuation ->
@@ -385,10 +385,10 @@ index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, L
                     {iolist_to_binary(Body),
                      index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1, RD, Ctx)};
                 {ReqID, Error} ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     stream_error(Error, Boundary)
             after Timeout ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
                     whack_index_fsm(ReqID, FSMPid),
                     stream_error({error, timeout}, Boundary)
             end
@@ -447,12 +447,12 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of
         {ok, Results} ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),
             {JsonResults, RD, Ctx};
         {error, timeout} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
             {{halt, 503},
              wrq:set_resp_header("Content-Type", "text/plain",
                                  wrq:append_to_response_body(
@@ -460,7 +460,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
                                    RD)),
              Ctx};
         {error, Reason} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             {{error, Reason}, RD, Ctx}
     end.
 

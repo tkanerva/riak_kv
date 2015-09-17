@@ -224,10 +224,10 @@ malformed_request(RD, Ctx) ->
             DocCtx = ensure_doc(ResCtx),
             case DocCtx#ctx.doc of
                 {error, Reason} ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     handle_common_error(Reason, ResRD, DocCtx);
                 _ ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {false, ResRD, DocCtx}
             end
     end.
@@ -314,13 +314,13 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                              {timeout, 60000}, {retry_put_coordinator_failure, false} |
                                    Options]) of
                 {error, Reason} ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     handle_common_error(Reason, RD, Ctx);
                 ok ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {true, RD, Ctx#ctx{doc={ok, Doc}}};
                 {ok, RObj} ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     Body = produce_doc_body(RObj),
                     {true, wrq:append_to_resp_body(Body, RD), Ctx#ctx{doc={ok, RObj}}}
             end;

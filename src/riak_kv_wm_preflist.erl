@@ -171,7 +171,7 @@ produce_preflist_body(RD, #ctx{bucket=Bucket0,
     Json = mochijson2:encode({struct,
                               [{<<"preflist">>,
                                 lists:flatten(jsonify_preflist(Preflist))}]}),
-    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     {Json, RD, Ctx}.
 
 %% Private

@@ -761,13 +761,13 @@ accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, 
                end,
     case C:put(Doc, Options2) of
         {error, Reason} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, Ctx);
         ok ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx#ctx{doc={ok, Doc}}};
         {ok, RObj} ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             DocCtx = Ctx#ctx{doc={ok, RObj}},
             HasSiblings = (select_doc(DocCtx) == multiple_choices),
             send_returnbody(RD, DocCtx, HasSiblings)
@@ -1025,10 +1025,10 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     end,
     case Result of
         {error, Reason} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
             handle_common_error(Reason, RD, Ctx);
         ok ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx}
     end.
 

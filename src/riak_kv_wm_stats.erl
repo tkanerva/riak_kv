@@ -76,7 +76,7 @@ forbidden(RD, Ctx) ->
 produce_body(ReqData, Ctx) ->
     Stats= riak_kv_http_cache:get_stats(),
     Body = mochijson2:encode({struct, Stats}),
-    riak_kv_wm_util:log_http_access(success, ReqData, unknown),
+    riak_kv_wm_utils:log_http_access(success, ReqData, unknown),
     {Body, ReqData, Ctx}.
 
 %% @spec pretty_print(webmachine:wrq(), context()) ->

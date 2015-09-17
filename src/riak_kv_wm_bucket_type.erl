@@ -165,7 +165,7 @@ forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT' ->
         true ->
             {false, RD, Ctx};
         false ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), "unknown bucket type"),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), "unknown bucket type"),
             {{halt, 404},
              wrq:set_resp_body(
                io_lib:format("Cannot modify unknown bucket type: ~p", [Ctx#ctx.bucket_type]),
@@ -251,7 +251,7 @@ content_types_accepted(RD, Ctx) ->
 %% @doc Produce the bucket properties as JSON.
 produce_bucket_type_body(RD, Ctx) ->
     Props = riak_core_bucket_type:get(Ctx#ctx.bucket_type),
-    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     JsonProps = mochijson2:encode(
                   {struct,
                    [
@@ -268,10 +268,10 @@ accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
     ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
     case riak_core_bucket_type:update(T, ErlProps) of
         ok ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx};
         {error, Details} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Details),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Details),
             JSON = mochijson2:encode(Details),
             RD2 = wrq:append_to_resp_body(JSON, RD),
             {{halt, 400}, RD2, Ctx}

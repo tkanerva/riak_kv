@@ -211,10 +211,10 @@ produce_bucket_list(RD, #ctx{client=Client,
             %% Get the buckets.
             case Client:list_buckets(none, Timeout, BType) of
                 {ok, Buckets} ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), RD, Ctx};
                 {error, Reason} ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     {mochijson2:encode({struct, [{error, Reason}]}), RD, Ctx}
             end;
         ?Q_STREAM ->
@@ -230,7 +230,7 @@ produce_bucket_list(RD, #ctx{client=Client,
 stream_buckets(ReqId, RD, Ctx) ->
     receive
         {ReqId, done} ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {mochijson2:encode({struct, [{<<"buckets">>, []}]}), done};
         {ReqId, _From, {buckets_stream, Buckets}} ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
@@ -239,6 +239,6 @@ stream_buckets(ReqId, RD, Ctx) ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId, RD, Ctx) end};
         {ReqId, {error, timeout}} -> 
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
             {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.

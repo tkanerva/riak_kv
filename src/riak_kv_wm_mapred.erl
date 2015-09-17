@@ -217,7 +217,7 @@ pipe_mapred(RD,
                     pipe_mapred_nonchunked(RD, State, Mrc)
             end;
         {error, {Fitting, Reason}} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Reason),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Reason),
             {{halt, 400},
              send_error({error, [{phase, Fitting},
                                  {error, iolist_to_binary(Reason)}]}, RD),
@@ -228,7 +228,7 @@ pipe_mapred(RD,
 pipe_mapred_nonchunked(RD, State, Mrc) ->
     case riak_kv_mrc_pipe:collect_sink(Mrc) of
         {ok, Results} ->
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(State#state.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(State#state.security)),
             JSONResults =
                 case Mrc#mrc_ctx.keeps < 2 of
                     true ->
@@ -248,21 +248,21 @@ pipe_mapred_nonchunked(RD, State, Mrc) ->
         {error, {sender_died, Error}} ->
             %% the sender links to the builder, so the builder has
             %% already been torn down
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sender_died, Error}),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sender_died, Error}),
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {{halt, 500}, send_error(Error, RD), State};
         {error, {sink_died, Error}} ->
             %% pipe monitors the sink, so the sink death has already
             %% detroyed the pipe
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sink_died, Error}),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sink_died, Error}),
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), timeout),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), timeout),
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             {{halt, 500}, send_error({error, timeout}, RD), State};
         {error, {From, Info}} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Info),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Info),
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
             {{halt, 500}, send_error({error, Json}, RD), State}
@@ -296,7 +296,7 @@ pipe_stream_mapred_results(RD,
                     end,
             {BodyB,Next} = case Done of
                                true ->
-                                   riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(State#state.security)),
+                                   riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(State#state.security)),
                                    riak_kv_mrc_pipe:cleanup_sink(Mrc),
                                    {iolist_to_binary(
                                       ["\r\n--", Boundary, "--\r\n"]),
@@ -309,23 +309,23 @@ pipe_stream_mapred_results(RD,
                            end,
             {iolist_to_binary([BodyA,BodyB]), Next};
         {error, timeout, _} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), timeout),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), timeout),
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             {format_error({error, timeout}), done};
         {error, {sender_died, Error}, _} ->
             %% sender links to the builder, so the builder death has
             %% already destroyed the pipe
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sender_died, Error}),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sender_died, Error}),
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {format_error(Error), done};
         {error, {sink_died, Error}, _} ->
             %% pipe monitors the sink, so the sink death has already
             %% detroyed the pipe
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sink_died, Error}),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), {sink_died, Error}),
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {format_error(Error), done};
         {error, {From, Info}, _} ->
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Info),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(State#state.security), Info),
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
             {format_error({error, Json}), done}

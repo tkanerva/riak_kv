@@ -252,12 +252,12 @@ produce_bucket_body(RD, #ctx{client=Client,
             %% Get the JSON response...
             case Client:list_keys(Bucket, Timeout) of
                 {ok, KeyList} ->
-                    riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
                                                       [{?Q_KEYS, KeyList}]}),
                     {JsonKeys, RD, Ctx};
                 {error, Reason} ->
-                    riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     {mochijson2:encode({struct, [{error, Reason}]}), RD, Ctx}
             end;
         _ ->
@@ -273,9 +273,9 @@ stream_keys(ReqId, RD, Ctx) ->
         {ReqId, {keys, Keys}} ->
             {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId, RD, Ctx) end};
         {ReqId, done} -> 
-            riak_kv_wm_util:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
         {ReqId, {error, timeout}} -> 
-            riak_kv_wm_util:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
             {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.

@@ -442,8 +442,8 @@ method_to_perm('DELETE') ->
 
 %% @doc Helper functions to log object access from the HTTP API
 log_http_access(success, ReqData, User) ->
-    access:info("Succesful object access for http ~p request for user: ~p from host: ~p. Query info: ~p with tokens: ~p",
-        [wrq:method(ReqData), User, wrq:peer(ReqData), wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).
+    access:info("Succesful object access for http ~p request against path: ~p for user: ~s from host: ~s. Query info: ~p with tokens: ~p",
+        [wrq:method(ReqData), wrq:raw_path(ReqData), User, wrq:peer(ReqData), wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).
 log_http_access(failure, ReqData, User, Reason) ->
-    access:error("Failed object access for http ~p request for user: ~p from host: ~p with reason: ~p. Query info: ~p with tokens: ~p",
-        [wrq:method(ReqData), User, wrq:peer(ReqData), Reason, wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).
+    access:error("Failed object access for http ~p request against path: ~p for user: ~s from host: ~s with reason: ~p. Query info: ~p with tokens: ~p",
+        [wrq:method(ReqData), wrq:raw_path(ReqData), User, wrq:peer(ReqData), Reason, wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).

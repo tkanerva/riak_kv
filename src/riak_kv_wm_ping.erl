@@ -52,4 +52,5 @@ is_authorized(ReqData, Ctx) ->
     end.
 
 to_html(ReqData, Ctx) ->
+    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     {"OK", ReqData, Ctx}.

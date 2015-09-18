@@ -138,7 +138,7 @@ forbidden(RD, Ctx) ->
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
-                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error)
+                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->

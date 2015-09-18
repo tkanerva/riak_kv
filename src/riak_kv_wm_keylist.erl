@@ -138,9 +138,11 @@ forbidden(RD, Ctx) ->
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
+                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->
+                    riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {false, RD, Ctx}
             end
     end.
@@ -222,7 +224,7 @@ produce_bucket_body(RD, #ctx{client=Client,
             F = fun() ->
                         {ok, ReqId} = Client:stream_list_keys(Bucket,
                                                               Timeout),
-                        stream_keys(ReqId)
+                        stream_keys(ReqId, RD, Ctx)
                 end,
 
             %% For API Version 1, send back the BucketPropsJson first
@@ -241,10 +243,12 @@ produce_bucket_body(RD, #ctx{client=Client,
             %% Get the JSON response...
             case Client:list_keys(Bucket, Timeout) of
                 {ok, KeyList} ->
+                    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
                                                       [{?Q_KEYS, KeyList}]}),
                     {JsonKeys, RD, Ctx};
                 {error, Reason} ->
+                    riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Reason),
                     {mochijson2:encode({struct, [{error, Reason}]}), RD, Ctx}
             end;
         _ ->
@@ -252,13 +256,17 @@ produce_bucket_body(RD, #ctx{client=Client,
             {JsonProps, RD, Ctx}
     end.
 
-stream_keys(ReqId) ->
+stream_keys(ReqId, RD, Ctx) ->
     receive
         {ReqId, From, {keys, Keys}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
+            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId, RD, Ctx) end};
         {ReqId, {keys, Keys}} ->
-            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
-        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId, RD, Ctx) end};
+        {ReqId, done} -> 
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+            {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
+        {ReqId, {error, timeout}} -> 
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), timeout),
+            {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.

@@ -164,9 +164,11 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                                                            Security),
             case Res of
                 {false, Error, _} ->
+                    riak_api_web_security:log_login_event(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Error),
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->
+                    riak_api_web_security:log_login_event(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
                     {false, RD, Ctx}
             end
     end.
@@ -253,6 +255,7 @@ produce_bucket_body(RD, Ctx) ->
     JsonProps1 = get_bucket_props_json(Client, Bucket),
     JsonProps2 = {struct, [JsonProps1]},
     JsonProps3 = mochijson2:encode(JsonProps2),
+    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     {JsonProps3, RD, Ctx}.
 
 get_bucket_props_json(Client, Bucket) ->
@@ -267,8 +270,10 @@ accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=P
     ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
     case C:set_bucket({T,B}, ErlProps) of
         ok ->
+            riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
             {true, RD, Ctx};
         {error, Details} ->
+            riak_kv_wm_utils:log_http_access(failure, RD, riak_core_security:get_username(Ctx#ctx.security), Details),
             JSON = mochijson2:encode(Details),
             RD2 = wrq:append_to_resp_body(JSON, RD),
             {{halt, 400}, RD2, Ctx}
@@ -279,4 +284,5 @@ accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=P
 %% @doc Reset the bucket properties back to the default values
 delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C}) ->
     C:reset_bucket({T,B}),
+    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
     {true, RD, Ctx}.

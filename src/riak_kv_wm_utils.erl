@@ -42,7 +42,9 @@
          ensure_bucket_type/3,
          bucket_type_exists/1,
          maybe_bucket_type/2,
-         method_to_perm/1
+         method_to_perm/1,
+         log_http_access/3,
+         log_http_access/4
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -432,3 +434,11 @@ method_to_perm('GET') ->
     "riak_kv.get";
 method_to_perm('DELETE') ->
     "riak_kv.delete".
+
+%% @doc Helper functions to log object access from the HTTP API
+log_http_access(success, ReqData, User) ->
+    access:info("Succesful object access for http ~p request against path: ~p for user: ~s from host: ~s. Query info: ~p with tokens: ~p",
+        [wrq:method(ReqData), wrq:raw_path(ReqData), User, wrq:peer(ReqData), wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).
+log_http_access(failure, ReqData, User, Reason) ->
+    access:error("Failed object access for http ~p request against path: ~p for user: ~s from host: ~s with reason: ~p. Query info: ~p with tokens: ~p",
+        [wrq:method(ReqData), wrq:raw_path(ReqData), User, wrq:peer(ReqData), Reason, wrq:path_info(ReqData), wrq:path_tokens(ReqData)]).

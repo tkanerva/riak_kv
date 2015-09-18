@@ -31,6 +31,17 @@
          to_html/2
         ]).
 
+-record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket_type,  %% binary() - Bucket type (from uri)
+              bucket,       %% binary() - Bucket name (from uri)
+              client,       %% riak_client() - the store client
+              prefix,       %% string() - prefix for resource uris
+              riak,         %% local | {node(), atom()} - params for riak client
+              allow_props_param, %% true if the user can also list props. (legacy API)
+              timeout,      %% integer() - list keys timeout
+              security      %% security context
+             }).
+
 -include_lib("webmachine/include/webmachine.hrl").
 
 init([]) ->
@@ -52,5 +63,5 @@ is_authorized(ReqData, Ctx) ->
     end.
 
 to_html(ReqData, Ctx) ->
-    riak_kv_wm_utils:log_http_access(success, RD, riak_core_security:get_username(Ctx#ctx.security)),
+    riak_kv_wm_utils:log_http_access(success, ReqData, riak_core_security:get_username(Ctx#ctx.security)),
     {"OK", ReqData, Ctx}.

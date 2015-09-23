@@ -51,8 +51,9 @@ is_authorized(ReqData, Ctx) ->
     case riak_api_web_security:is_authorized(ReqData) of
         false ->
             {"Basic realm=\"Riak\"", ReqData, Ctx};
-        {true, _SecContext} ->
-            {true, ReqData, Ctx};
+        {true, SecContext} ->
+            Context = #ctx{security=SecContext},
+            {true, ReqData, Context};
         insecure ->
             %% XXX 301 may be more appropriate here, but since the http and
             %% https port are different and configurable, it is hard to figure
@@ -61,6 +62,10 @@ is_authorized(ReqData, Ctx) ->
                     "Riak does not accept credentials over HTTP. Try HTTPS "
                     "instead.">>, ReqData), Ctx}
     end.
+
+to_html(ReqData, undefined) ->
+    riak_kv_wm_utils:log_http_access(success, ReqData, unknown),
+    {"OK", ReqData, undefined};
 
 to_html(ReqData, Ctx) ->
     riak_kv_wm_utils:log_http_access(success, ReqData, riak_core_security:get_username(Ctx#ctx.security)),

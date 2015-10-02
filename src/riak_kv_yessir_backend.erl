@@ -126,7 +126,7 @@
          is_empty/1,
          status/1,
          callback/3]).
--export([make_riak_safe_obj/3, make_riak_safe_obj/4]).
+-export([make_riak_safe_obj/3, make_riak_safe_obj/4, not_found/3, empty_set/3]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -239,6 +239,8 @@ get_object_bprefix([{P, {Mod, Fun}}|Ps], Bucket, Key, WantsBinary, S) ->
     P_len = byte_size(P),
     case Bucket of
         <<P:P_len/binary, Rest/binary>> ->
+            make_get_return_val(Mod:Fun(Rest, Bucket, Key), WantsBinary, S);
+        {<<P:P_len/binary, Rest/binary>>, _Bucket} ->
             make_get_return_val(Mod:Fun(Rest, Bucket, Key), WantsBinary, S);
         _ ->
             get_object_bprefix(Ps, Bucket, Key, WantsBinary, S)
@@ -441,6 +443,17 @@ make_riak_safe_obj(Bucket, Key, Bin, Metas)
     RObj = riak_object:new(Bucket, Key, Bin, Meta),
     riak_object:increment_vclock(RObj, <<"yessir!">>, 1).
 
+
+%% Helpers for bucket prefix funs
+
+not_found(_Prefix, _B, _K) ->
+    not_found.
+
+%% Return an empty CRDT set
+empty_set(_Prefix, B, K) ->
+    riak_kv_crdt:new(B, K, riak_dt_map).
+
+
 %%
 %% Test
 %%
@@ -473,3 +486,5 @@ eqc_test() ->
 -endif. % EQC
 -endif. % TEST
 -endif. % USE_BROKEN_TESTS
+
+

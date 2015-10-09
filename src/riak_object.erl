@@ -77,7 +77,7 @@
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, approximate_size/2]).
+-export([hash/1, hash_orig/1, canon_http_md/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -596,12 +596,122 @@ get_value(Object=#r_object{}) ->
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @doc calculates the hash of a riak object
+%% @doc calculates the hash of a riak object -- original version before trickery below
 -spec hash(riak_object()) -> integer().
-hash(Obj=#r_object{}) ->
+hash_orig(Obj=#r_object{}) ->
     Vclock = vclock(Obj),
     UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
-    erlang:phash2(to_binary(v0, UpdObj)).
+    Contents2 = [{canon_dict(MD), V} || {MD, V} <- riak_object:get_contents(UpdObj)],
+    UpdObj2 = riak_object:set_contents(UpdObj, Contents2),
+    erlang:phash2(to_binary(v0, UpdObj2)).
+
+%% @doc Coerce hashing the object to work around dicts being build differently depending
+%% on the order of operations.  Instead of starting with an empty dict and inserting
+%% in a fixed order, we use a 'prototypical' dict that we then update with any missing
+%% pieces to try and force the order.  If there are any decoding issues default
+%% to a simple ordered insert rather than crash the vnode.
+hash(Obj) ->
+    Vclock = riak_object:vclock(Obj),
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
+    Contents2 = [{canon_http_md(MD), V} || {MD, V} <- riak_object:get_contents(UpdObj)],
+    UpdObj2 = riak_object:set_contents(UpdObj, Contents2),
+    erlang:phash2(riak_object:to_binary(v0, UpdObj2)).
+
+canon_http_md(MD) ->
+    try extract_common(MD) of
+        {_CT, VT, LM, _CS, _Dot, true, _Rest} ->
+            create_del_md(VT, LM);
+        {CT, VT, LM, undefined, undefined, _TS, Rest} ->
+            D1 = create_http_md(CT, VT, LM),
+            lists:foldl(fun({K,V}, D2) ->
+                                dict:store(K, V, D2)
+                        end, D1, lists:sort(Rest));
+        {CT, VT, LM, undefined, Dot, _TS, Rest} ->
+            D1 = create_http_md(CT, VT, LM),
+            lists:foldl(fun({K,V}, D2) ->
+                                dict:store(K, V, D2)
+                        end, D1, lists:sort([{<<"dot">>, Dot} | Rest]));
+        {CT, VT, LM, CS, undefined, _TS, Rest} ->
+            D1 = create_http_md(CT, VT, LM),
+            lists:foldl(fun({K,V}, D2) ->
+                                dict:store(K, V, D2)
+                        end, D1, lists:sort([{<<"charset">>, CS} | Rest]));
+        {CT, VT, LM, CS, Dot, _TS, Rest} ->
+            D1 = create_http_charset_dot_md(CT, VT, LM, CS, Dot),
+            lists:foldl(fun({K,V}, D2) ->
+                                dict:store(K, V, D2)
+                        end, D1, lists:sort(Rest))
+    catch
+        _:_ -> % If it all goes south, just canonicalize
+            canon_dict(MD)
+    end.
+
+extract_common(MD) ->
+    dict:fold(fun(<<"content-type">>, ContentType, {_CT, VT, LM, CS, Dot, TS, Rest}) ->
+                      {ContentType, VT, LM, CS, Dot, TS, Rest};
+                 (<<"X-Riak-VTag">>, VTag, {CT, _VT, LM, CS, Dot, TS, Rest}) ->
+                      {CT, VTag, LM, CS, Dot, TS, Rest};
+                 (<<"X-Riak-Last-Modified">>, LastMod, {CT, VT, _LM, CS, Dot, TS, Rest}) ->
+                      {CT, VT, LastMod, CS, Dot, TS, Rest};
+                 (<<"charset">>, CharSet, {CT, VT, LM, _CS, Dot, TS, Rest}) ->
+                      {CT, VT, LM, CharSet, Dot, TS, Rest};
+                 (<<"dot">>, Dot, {CT, VT, LM, CS, _DotIn, TS, Rest}) ->
+                      {CT, VT, LM, CS, Dot, TS, Rest};
+                 (<<"X-Riak-Deleted">>, "true", {CT, VT, LM, CS, Dot, _TS, Rest}) ->
+                      {CT, VT, LM, CS, Dot, true, Rest};
+                 (Key, Value, {CT, VT, LM, CS, Dot, TS, Rest}) ->
+                            {CT, VT, LM, CS, Dot, TS, [{Key, Value} | Rest]}
+              end, {undefined, undefined, undefined, undefined, undefined, false, []}, MD).
+
+
+create_http_md(ContentType, VTag, LastMod) ->
+    {dict,6,16,16,8,80,48,
+     {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+     {{[],[],
+       [[<<"Links">>]],
+       [],[],[],[],[],[],[],
+       [[<<"content-type">>|ContentType],
+        [<<"X-Riak-VTag">>|VTag]],
+       [[<<"index">>]],
+       [],
+       [[<<"X-Riak-Last-Modified">>|LastMod]],
+       [],
+       [[<<"X-Riak-Meta">>]]}}}.
+
+create_http_charset_dot_md(ContentType, VTag, LastMod, Charset, Dot) ->
+    {dict,8,16,16,8,80,48,
+     {[],[],[],[],[],[],[],[],[],[],[],[],[],[],
+      [],[]},
+     {{[],[],
+       [[<<"Links">>]],
+       [],
+       [[<<"dot">>|Dot]],
+       [],[],[],[],[],
+       [[<<"content-type">>|ContentType],
+        [<<"X-Riak-VTag">>|VTag]],
+       [[<<"index">>]],
+       [],
+       [[<<"X-Riak-Last-Modified">>|
+         LastMod]],
+       [],
+       [[<<"X-Riak-Meta">>],
+        [<<"charset">>|Charset]]}}}.
+
+create_del_md(VTag, LastMod) ->
+    {dict,4,16,16,8,80,48,
+     {[],[],[],[],[],[],[],[],[],[],[],[],[],[],
+      [],[]},
+     {{[],[],[],[],[],[],[],[],[],[],
+       [[<<"X-Riak-VTag">>|VTag]],
+       [[<<"index">>]],
+       [[<<"X-Riak-Deleted">>,116,114,117,101]],
+       [[<<"X-Riak-Last-Modified">>|
+         LastMod]],
+       [],[]}}}.
+
+%% @doc canonicalize the dictionary
+canon_dict(D) ->
+    dict:from_list(lists:sort(dict:to_list(D))).
 
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), dict()) -> riak_object().

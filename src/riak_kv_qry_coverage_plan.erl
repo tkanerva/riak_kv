@@ -32,8 +32,8 @@
 create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     Query = riak_local_index:get_query_from_req(Request),
     Key2 = make_key(Query),
-    BucketName = riak_kv_util:get_bucket_from_req(Request),
-    VNodes = hash_for_nodes(NVal, BucketName, BucketName, Key2),
+    BucketType = riak_kv_util:get_bucket_from_req(Request),
+    VNodes = hash_for_nodes(NVal, BucketType, Key2),
     NoFilters = [],
     _CoveragePlan = {VNodes, NoFilters}.
 
@@ -49,11 +49,8 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
     eleveldb_ts:encode_key(Key).
 
 %%
-hash_for_nodes(NVal,
-               BucketType, BucketName, Key) when is_binary(BucketType),
-                                                 is_binary(BucketName),
-                                                 is_binary(Key) ->
-    DocIdx = riak_core_util:chash_key({{BucketType,BucketName}, Key}),
+hash_for_nodes(NVal, {_,_} = BucketType, Key) when is_binary(Key) ->
+    DocIdx = riak_core_util:chash_key({BucketType, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
     {VNodes, _} = lists:unzip(Perfs),

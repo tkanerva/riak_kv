@@ -250,7 +250,7 @@ handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
     Timeout = {timeout, 10000},
     Me = self(),
     CoverageFn = {colocated, riak_kv_qry_coverage_plan},
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [{Bucket, Bucket}, none, Q, Timeout, all, undefined, CoverageFn]]),
     handle_side_effects(T).
 
 decode_results(KVList, SelectSpec) ->

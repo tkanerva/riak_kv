@@ -169,6 +169,7 @@ stop(#state{data_ref=DataRef,
                  {error, term(), state()}.
 get(Bucket, Key, State=#state{data_ref=DataRef,
                               index_ref=IndexRef,
+                              time_ref=TimeRef,
                               used_memory=UsedMemory,
                               max_memory=MaxMemory,
                               ttl=TTL}) ->
@@ -182,6 +183,13 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
                     %% entries blindly using match_delete.
                     ets:delete(DataRef, {Bucket, Key}),
                     ets:match_delete(IndexRef, ?DELETE_PTN(Bucket, Key)),
+                    case TimeRef of
+                        undefined ->
+                            %% To be in sync with the delete/4 code
+                            ok;
+                        _ ->
+                            ets:delete(TimeRef, Timestamp)
+                    end,
                     case MaxMemory of
                         undefined ->
                             UsedMemory1 = UsedMemory;
@@ -231,6 +239,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         true ->
             UsedMemory;
         _ ->
+            %% TimeRef should be undefined, shouldn't it?
+            %% But in that case calling trim_data_table doesn't make sense.
             time_entry(Bucket, PrimaryKey, Now, TimeRef),
             Freed = trim_data_table(MaxMemory,
                                     UsedMemory + Size,
@@ -650,6 +660,8 @@ update_indexes(Bucket, Key, [{add, Field, Value}|Rest], IndexRef) ->
     update_indexes(Bucket, Key, Rest, IndexRef).
 
 %% @private
+time_entry(_Bucket, _Key, _Now, undefined) ->
+    ok;
 time_entry(Bucket, Key, Now, TimeRef) ->
     ets:insert(TimeRef, {Now, {Bucket, Key}}).
 

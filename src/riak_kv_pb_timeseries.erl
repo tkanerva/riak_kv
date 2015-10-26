@@ -139,7 +139,7 @@ decode(Code, Bin) ->
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
-encode(#tsqueryresp=Message) ->
+encode(#tsqueryresp{}=Message) ->
     {ok, encode_tsqueryresp(Message)};
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
@@ -372,7 +372,7 @@ to_string(X) ->
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
-    lists:foldl(
+    FoldFun =
       fun(Raw, ErrorsCnt) ->
               Obj = Mod:add_column_info(Raw),
 
@@ -394,8 +394,34 @@ put_data(Data, Table, Mod) ->
                       ErrorsCnt
               end
       end,
-      0, Data).
+    put_data(Data, 50, length(Data) div 50, FoldFun). %% 50 is arbitrary, FIX
 
+put_data(Data, _Len, 0, FoldFun) ->
+    %% Don't spawn processes if we don't have much data
+    lists:foldl(FoldFun, 0, Data);
+put_data(Data, Len, WorkerCount, FoldFun) ->
+    Pids = lists:map(fun(Idx) ->
+                             spawn(riak_kv_timeseries_pput_sup, pput,
+                                   [FoldFun, ts_chunk(Data, Idx, Len)])
+                     end, lists:seq(0, WorkerCount)),
+    wait_for(Pids),
+    0. %% Hard-coded for performance testing ONLY
+
+wait_for([]) ->
+    ok;
+wait_for(Pids) ->
+    wait_for(
+      lists:foldl(fun(Pid, Accum) ->
+                          case is_process_alive(Pid) of
+                              true ->
+                                  [Pid] ++ Accum;
+                              false ->
+                                  Accum
+                          end
+                  end, [], Pids)).
+
+ts_chunk(AllData, Index, Size) ->
+    lists:sublist(AllData, Index * Size + 1, Size).
 
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}) ->

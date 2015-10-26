@@ -163,7 +163,11 @@ decode(Code, Bin) ->
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
+<<<<<<< HEAD
 encode(#tsqueryresp{}=Message) ->
+=======
+encode(#tsqueryresp=Message) ->
+>>>>>>> Create fill-in-the-blanks for the pending nif
     {ok, encode_tsqueryresp(Message)};
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.

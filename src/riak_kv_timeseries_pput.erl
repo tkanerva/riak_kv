@@ -38,7 +38,7 @@ start_link(Args) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({batch_put, Fun, Data}, _From, State) ->
+handle_call({foldl, Fun, Data}, _From, State) ->
     lists:foldl(Fun, 0, Data),
     {reply, ok, State}.
 

@@ -25,25 +25,26 @@
 -behaviour(supervisor).
 
 -export([pput/2]).
--export([start/2, stop/1]).
+-export([start_link/2, stop/1]).
 -export([init/1]).
 
 -define(POOL_NAME, ts_workers).
 
-start(_Type, _Args) ->
+start_link(_Type, _Args) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 stop(_State) ->
     ok.
 
 init([]) ->
-    PoolSpecs =
+    PoolArgs =
         [{name, {local, ?POOL_NAME}},
          {worker_module, riak_kv_timeseries_pput},
          {size, 50},
          {max_overflow, 50}],
+    ChildSpec = poolboy:child_spec(?POOL_NAME, PoolArgs, []),
 
-    {ok, {{one_for_one, 10, 10}, PoolSpecs}}.
+    {ok, {{one_for_one, 10, 10}, [ChildSpec]}}.
 
 pput(Fun, Data) ->
     poolboy:transaction(?POOL_NAME, fun(Worker) ->

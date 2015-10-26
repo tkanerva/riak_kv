@@ -37,6 +37,9 @@
          process/2,
          process_stream/3]).
 
+%% export for matthew debug
+-export([decode_tsputreq/1]).
+
 %% NOTE: Clients will work with table names. Those names map to a
 %% bucket type/bucket name tuple in Riak, with both the type name and
 %% the bucket name matching the table.
@@ -55,6 +58,14 @@
           req_ctx,
           column_info
          }).
+
+%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
+-record(tsputreq2, {
+    table = erlang:error({required, table}),
+    columns = [],
+    rows = []
+}).
+
 
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
@@ -214,11 +225,7 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-<<<<<<< HEAD
                 case make_ts_keys(CompoundKey, DDL, Mod) of
-=======
-                case make_ts_keys(CompoundKey, DDL) of
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
                     {ok, PKLK} ->
                         riak_client:get(
                           {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
@@ -282,11 +289,7 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-<<<<<<< HEAD
                 case make_ts_keys(CompoundKey, DDL, Mod) of
-=======
-                case make_ts_keys(CompoundKey, DDL) of
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
                     {ok, PKLK} ->
                         riak_client:delete_vclock(
                           {Table, Table}, PKLK, VClock, Options,
@@ -309,19 +312,15 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
     end;
 
 
-<<<<<<< HEAD
+
 process(#tslistkeysreq{table   = Table,
                        timeout = Timeout} = Req,
         State) ->
-=======
-process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
     Mod = riak_ql_ddl:make_module_name(Table),
     case catch Mod:get_ddl() of
         {_, {undef, _}} ->
             Props = riak_core_bucket:get_bucket(Table),
             {reply, missing_helper_module(Table, Props), State};
-<<<<<<< HEAD
         DDL ->
             Result = riak_client:stream_list_keys(
                        {Table, Table}, Timeout,
@@ -333,18 +332,6 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
                          || #param_v1{name = N} <- DDL#ddl_v1.local_key#key_v1.ast],
                     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                          column_info = ColumnInfo}};
-=======
-        _DDL ->
-            Filter = none,
-            Result = riak_client:list_keys(
-                       Table, Filter, Timeout, Mod,
-                       {riak_client, [node(), undefined]}),
-            case Result of
-                {ok, CompoundKeys} ->
-                    Keys = riak_pb_ts_codec:encode_rows_non_strict(
-                             [tuple_to_list(A) || A <- CompoundKeys]),
-                    {reply, #tslistkeysresp{keys = Keys, done = true}, State};
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
                 {error, Reason} ->
                     {reply, make_rpberrresp(
                               ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
@@ -494,7 +481,6 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
-<<<<<<< HEAD
 row_to_key(Row, DDL, Mod) ->
     riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
@@ -530,13 +516,10 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
     {RObj, LK}.
 
 
-=======
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
-<<<<<<< HEAD
 
     Bucket = table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -574,47 +557,15 @@ put_data(Data, Table, Mod) ->
               end
       end,
                            {[], 0}, PreflistData),
-=======
-    {ReqIds, FailReqs} = lists:foldl(
-      fun(Raw, {ReqIdsAcc, ErrorsCnt}) ->
-              Obj = Mod:add_column_info(Raw),
-
-              PK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_partition_key(DDL, Raw)),
-              LK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_local_key(DDL, Raw)),
-
-              RObj0 = riak_object:new(table_to_bucket(Table), PK, Obj),
-              MD = riak_object:get_update_metadata(RObj0),
-              MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
-              MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
-              RObj = riak_object:update_metadata(RObj0, MD2),
-
-              case riak_kv_w1c_worker:async_put(RObj, []) of
-                  {error, _Why} ->
-                      {ReqIdsAcc, ErrorsCnt + 1};
-                  {ok, ReqId} ->
-                      {[ReqId | ReqIdsAcc], ErrorsCnt}
-              end
-      end,
-      {[], 0}, Data),
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
     Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
     length(lists:filter(fun({error, _}) -> true;
                            (_) -> false
                         end, Responses)) + FailReqs.
 
-<<<<<<< HEAD
 -spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
                           {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}, Mod) ->
-=======
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}) ->
-                          {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
-make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}) ->
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
@@ -631,15 +582,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                    || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
             %% 2. make the PK and LK
-<<<<<<< HEAD
             PK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
             LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
-=======
-            PK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_partition_key(DDL, BareValues)),
-            LK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_local_key(DDL, BareValues)),
->>>>>>> manual merge of end-to-end and this branch for only riak_kv_pb_timeseries.erl
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

@@ -351,7 +351,7 @@ put_data(Data, Table, Mod) ->
                       {[ReqId | ReqIdsAcc], ErrorsCnt}
               end
       end,
-                           {[], 0}, Data),
+      {[], 0}, Data),
     Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
     length(lists:filter(fun({error, _}) -> true;
                            (_) -> false

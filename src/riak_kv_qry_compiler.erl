@@ -66,13 +66,13 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
     end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
-    GetMaxMinFun = fun({startkey, [{_, _, H} | _T]}, {_S, E}) ->
-			   {H, E};
-		      ({endkey,   [{_, _, H} | _T]}, {S, _E}) ->
-			   {S, H};
-		      (_, {S, E})  ->
-			   {S, E}
-		   end,
+    GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
+                           {element(3, lists:last(List)), E};
+                      ({endkey,   List}, {S, _E}) ->
+                           {S, element(3, lists:last(List))};
+                      (_, {S, E})  ->
+                           {S, E}
+                   end,
     {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
     [{[QField], Q, U}] = [{X, Y, Z}
 			  || #hash_fn_v1{mod = riak_ql_quanta,

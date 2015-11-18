@@ -787,6 +787,47 @@ regression_367_key_range_test_() ->
      ?_assertEqual(ok, stop(State1))
     ].
 
+%% Time ets table (_t) was not being cleaned up during put operations
+regression_1238_timeref_leak_test_() ->
+    {setup,
+     fun r_1238_setup/0,
+     fun r_1238_teardown/1,
+     fun r_1238/1}.
+
+r_1238({{Basic, BasicP}, {TTL, TTLP}, {MaxMem, MaxMemP}, {Both, BothP}}) ->
+    {ok, Basic1} = put(<<"bucket">>, <<"key">>, [], <<"value">>, Basic),
+    {ok, TTL1} = put(<<"bucket">>, <<"key">>, [], <<"value">>, TTL),
+    {ok, MaxMem1} = put(<<"bucket">>, <<"key">>, [], <<"value">>, MaxMem),
+    {ok, Both1} = put(<<"bucket">>, <<"key">>, [], <<"value">>, Both),
+
+    timer:sleep(timer:seconds(3)),
+
+    get(<<"bucket">>, <<"key">>, Basic1),
+    get(<<"bucket">>, <<"key">>, TTL1),
+    get(<<"bucket">>, <<"key">>, MaxMem1),
+    get(<<"bucket">>, <<"key">>, Both1),
+
+    [
+     ?_assertEqual(undefined, ets:info(?TNAME(BasicP))),
+     ?_assertEqual(undefined, ets:info(?TNAME(TTLP))),
+     ?_assertNotEqual('$end_of_table', ets:last(?TNAME(MaxMemP))),
+     ?_assertEqual('$end_of_table', ets:last(?TNAME(BothP)))
+    ].
+
+r_1238_setup() ->
+    TestConfig = [{test, true}, {test_table_opts, [public, named_table]}],
+    {ok, Basic} = start(4, TestConfig),
+    {ok, TTL} = start(8, [{ttl, 1}] ++ TestConfig),
+    {ok, MaxMem} = start(12, [{max_memory, 128}] ++ TestConfig),
+    {ok, Both} = start(16, [{ttl, 1}, {max_memory, 128}] ++ TestConfig),
+    {{Basic, 4}, {TTL, 8}, {MaxMem, 12}, {Both, 16}}.
+
+r_1238_teardown({{Basic, _}, {TTL, _}, {MaxMem, _}, {Both, _}}) ->
+    stop(Basic),
+    stop(TTL),
+    stop(MaxMem),
+    stop(Both).
+
 -ifdef(EQC).
 
 eqc_test_() ->

@@ -118,28 +118,14 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     TTL = riak_kv_util:get_backend_config(ttl, Config, memory_backend),
     MemoryMB = riak_kv_util:get_backend_config(max_memory, Config, memory_backend),
-    %% leave this one alone, it is only for testing
-    NormalTableOpts = [ordered_set],
-    TestTableOpts = app_helper:get_prop_or_env(test_table_opts,
-                                               Config,
-                                               memory_backend,
-                                               [named_table, public]),
-    TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
-                    true ->
-                        NormalTableOpts ++ TestTableOpts;
-                    _ ->
-                        NormalTableOpts
-                end,
-    case MemoryMB of
-        undefined ->
-            MaxMemory = undefined,
-            TimeRef = undefined;
-        _ ->
-            MaxMemory = MemoryMB * 1024 * 1024,
-            TimeRef = ets:new(?TNAME(Partition), TableOpts)
-    end,
+
+    TableOpts = ets_options(Config),
+
+    MaxMemory = mb_to_bytes(MemoryMB),
+    TimeRef = table_if_memory_constrained(MemoryMB, Partition, TableOpts),
     IndexRef = ets:new(?INAME(Partition), TableOpts),
     DataRef = ets:new(?DNAME(Partition), TableOpts),
+
     {ok, #state{data_ref=DataRef,
                 index_ref=IndexRef,
                 max_memory=MaxMemory,
@@ -150,17 +136,10 @@ start(Partition, Config) ->
 -spec stop(state()) -> ok.
 stop(#state{data_ref=DataRef,
             index_ref=IndexRef,
-            max_memory=MaxMemory,
             time_ref=TimeRef}) ->
-    catch ets:delete(DataRef),
-    catch ets:delete(IndexRef),
-    case MaxMemory of
-        undefined ->
-            ok;
-        _ ->
-            catch ets:delete(TimeRef)
-    end,
-    ok.
+    catch ets_delete(DataRef),
+    catch ets_delete(IndexRef),
+    catch ets_delete(TimeRef).
 
 %% @doc Retrieve an object from the memory backend
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
@@ -698,6 +677,42 @@ object_size(Object) ->
             ok
     end,
     size(Bucket) + size(Key) + size(Val).
+
+%% @private
+ets_delete(undefined) ->
+    ok;
+ets_delete(Ref) ->
+    ets:delete(Ref).
+
+%% Helper functions for backend initialization
+
+%% @private
+mb_to_bytes(undefined) ->
+    undefined;
+mb_to_bytes(MB) when MB > 0 ->
+    MB * 1024 * 1024.
+
+%% @private
+table_if_memory_constrained(undefined, _Partition, _TableOpts) ->
+    undefined;
+table_if_memory_constrained(_MB, Partition, TableOpts) ->
+    ets:new(?TNAME(Partition), TableOpts).
+
+%% @private
+ets_options(Config) ->
+    TestTableOpts = app_helper:get_prop_or_env(test_table_opts,
+                                               Config,
+                                               memory_backend,
+                                               [named_table, public]),
+    NormalTableOpts = [ordered_set],
+
+    case app_helper:get_prop_or_env(test, Config, memory_backend) of
+        true ->
+            NormalTableOpts ++ TestTableOpts;
+        _ ->
+            NormalTableOpts
+    end.
+
 
 %% ===================================================================
 %% EUnit tests

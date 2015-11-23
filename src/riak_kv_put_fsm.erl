@@ -42,10 +42,15 @@
 -endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2, validate/2, precommit/2,
+-export([prepare/2, 
+         await_remote_coordinator/2,
          waiting_local_vnode/2,
-         waiting_remote_vnode/2,
-         postcommit/2, finish/2]).
+         waiting_remote_vnode/2
+        ]).
+%% to be called when the request_timeout happens - see schedule_timeout/1.
+-export([request_timeout/1, 
+         coordinator_timeout/2]).
+-export([remote_executing/2]).
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -110,7 +115,9 @@
                 trace = false :: boolean(), 
                 tracked_bucket=false :: boolean(), %% track per bucket stats
                 bad_coordinators = [] :: [atom()],
-                coordinator_timeout :: integer()
+                coordinator_timeout :: integer(),
+                monitor :: boolean(),
+                current_coordinator :: node %% which node are we trying to hand-off to?
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -168,6 +175,16 @@ set_put_coordinator_failure_timeout(Bad) ->
 get_put_coordinator_failure_timeout() ->
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
+request_timeout(Pid) ->
+    gen_fsm:send_event(Pid, request_timeout).
+
+coordinator_timeout(Pid, Context) ->
+    gen_fsm:send_event(Pid, {coordinator_timeout, Context}).
+
+remote_executing(Pid, Node) ->
+    gen_fsm:send_all_state_event(Pid, {remote_excuting, Node}).
+
+
 make_ack_options(Options) ->
     case (riak_core_capability:get(
             {riak_kv, put_fsm_ack_execute}, disabled) == disabled
@@ -194,17 +211,6 @@ spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
                   proc_lib:spawn(CoordNode, Mod, Fun, Args)
           end).
 
-monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) ->
-    {stop, normal, StateData};
-monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
-    receive
-        {ack, CoordNode, now_executing} ->
-            {stop, normal, StateData}
-    after StateData#state.coordinator_timeout ->
-            exit(MiddleMan, kill),
-            Bad = StateData#state.bad_coordinators,
-            prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
-    end.
 
 %% ===================================================================
 %% Test API
@@ -242,26 +248,24 @@ init([From, RObj, Options0, Monitor]) ->
                        options = Options,
                        timing = riak_kv_fsm_timing:add_timing(prepare, []),
                        coordinator_timeout=CoordTimeout},
-    (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
+    case Monitor of
+        true -> riak_kv_stat:update({fsm_spawned, puts});
+        false -> ok
+    end,
     case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
-            case riak_kv_util:is_x_deleted(RObj) of
-                true  ->
-                    TombNum = 1,
-                    TombStr = <<"tombstone">>;
-                false ->
-                    TombNum = 0,
-                    TombStr = <<>>
-            end,
+          {TombNum, TombStr} = tombstone_info(riak_kv_util:is_x_deleted(RObj)),
+
             ?DTRACE(?C_PUT_FSM_INIT, [TombNum], ["init", TombStr]);
         _ ->
             ok
     end,        
-    {ok, prepare, StateData, 0};
+    gen_fsm:send_event(self(), kickoff),
+    {ok, prepare, StateData};
 init({test, Args, StateProps}) ->
     %% Call normal init
-    {ok, prepare, StateData, 0} = init(Args),
+    {ok, prepare, StateData} = init(Args),
 
     %% Then tweak the state record with entries provided by StateProps
     Fields = record_info(fields, state),
@@ -272,12 +276,36 @@ init({test, Args, StateProps}) ->
         end,
     TestStateData = lists:foldl(F, StateData, StateProps),
 
-    %% Enter into the validate state, skipping any code that relies on the
+    %% Enter into the validate stage, skipping any code that relies on the
     %% state of the rest of the system
-    {ok, validate, TestStateData, 0}.
+    {next_state, NextState, TestStateData1} = pre_execute(TestStateData),
+    {ok, NextState, TestStateData1}.
 
 %% @private
-prepare(timeout, StateData0 = #state{from = From, robj = RObj,
+tombstone_info(true) ->
+  {1, <<"tombstone">>};
+tombstone_info(false) ->
+  {0, <<>>}.
+
+%% @doc pre_execute is called when prepare has succeed and the FSM needs to continue on
+%% this node.
+pre_execute(StateData1) ->
+    try 
+        StateData2=#state{} = validate(StateData1),
+        StateData3=#state{} = precommit(StateData2),
+        {next_state, NextState, StateData4} = execute(StateData3),
+        {next_state, NextState, StateData4}
+    catch
+        error:{badmatch, {ErrorReply, StateDataError}} ->
+            process_error(ErrorReply, StateDataError)
+    end.
+
+
+  
+
+
+%% @private
+prepare(kickoff, StateData0 = #state{from = From, robj = RObj,
                                      bkey = BKey = {Bucket, _Key},
                                      options = Options,
                                      trace = Trace,
@@ -307,7 +335,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
         end,
     case N of
         {error, _} = Error ->
-            process_reply(Error, StateData0);
+            process_error(Error, StateData0);
         _ ->
             StatTracked = get_option(stat_tracked, BucketProps, false),
             Preflist2 = 
@@ -331,7 +359,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     %% Empty preflist
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1], 
                             ["prepare",<<"all nodes down">>]),
-                    process_reply({error, all_nodes_down}, StateData0);
+                    process_error({error, all_nodes_down}, StateData0);
                 {_, true} ->
                     %% This node is not in the preference list
                     %% forward on to a random node
@@ -348,15 +376,24 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                         ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
                                 ["prepare", atom2list(CoordNode)]),
                         ok = riak_kv_stat:update(coord_redir),
-                        monitor_remote_coordinator(UseAckP, MiddleMan,
-                                                   CoordNode, StateData0)
+                        case UseAckP of 
+                            true ->
+                                timer:apply_after(StateData0#state.coordinator_timeout,
+                                                   ?MODULE,
+                                                   coordinator_timeout,
+                                                   [self(), {MiddleMan, CoordNode}]),
+                                {next_state, await_remote_coordinator,
+                                 StateData0#state{current_coordinator=CoordNode}};
+                            false ->
+                                {stop, normal, StateData0}
+                        end
                     catch
                         _:Reason ->
                             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
                                     ["prepare", dtrace_errstr(Reason)]),
                             lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
                                         [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
-                            process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
+                            process_error({error, {coord_handoff_failed, Reason}}, StateData0)
                     end;
                 _ ->
                     %% Putting asis, no need to handle locally on a node in the
@@ -381,17 +418,28 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                                 tracked_bucket = StatTracked},
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0], 
                             ["prepare", CoordPlNode]),
-                    new_state_timeout(validate, StateData)
+                    pre_execute(StateData)
             end
     end.
 
 %% @private
-validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
-                                      options = Options0,
-                                      robj = RObj0,
-                                      n=N, bucket_props = BucketProps,
-                                      trace = Trace,
-                                      preflist2 = Preflist2}) ->
+%% The succesful exit of await_remote_coordinator is handled in handle_event as the
+%% remote_executing event is an all-state event.
+await_remote_coordinator({coordinator_timeout, {MiddleMan, CoordNode}}, 
+                         #state{}=StateData) ->
+    exit(MiddleMan, kill),  
+    Bad = StateData#state.bad_coordinators,
+    gen_fsm:send_event(self(), kickoff),
+    {next_state, prepare, StateData#state{bad_coordinators=[CoordNode|Bad]}}.
+
+%% @private
+-spec validate(#state{}) -> #state{} | {{'error', term()}, #state{}}.
+validate(StateData0 = #state{from = {raw, ReqId, _Pid},
+                                     options = Options0,
+                                     robj = RObj0,
+                                     n=N, bucket_props = BucketProps,
+                                     trace = Trace,
+                                     preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
     W0 = get_option(w, Options0, default),
@@ -419,18 +467,18 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 
     if
         PW =:= error ->
-            process_reply({error, {pw_val_violation, PW0}}, StateData0);
+            {{error, {pw_val_violation, PW0}}, StateData0};
         W =:= error ->
-            process_reply({error, {w_val_violation, W0}}, StateData0);
+            {{error, {w_val_violation, W0}}, StateData0};
         DW =:= error ->
-            process_reply({error, {dw_val_violation, DW0}}, StateData0);
+            {{error, {dw_val_violation, DW0}}, StateData0};
         (W > N) or (DW > N) or (PW > N) ->
-            process_reply({error, {n_val_violation, N}}, StateData0);
+            {{error, {n_val_violation, N}}, StateData0};
         PW > NumPrimaries ->
-            process_reply({error, {pw_val_unsatisfied, PW, NumPrimaries}}, StateData0);
+            {{error, {pw_val_unsatisfied, PW, NumPrimaries}}, StateData0};
         NumVnodes < MinVnodes ->
-            process_reply({error, {insufficient_vnodes, NumVnodes,
-                                   need, MinVnodes}}, StateData0);
+            {{error, {insufficient_vnodes, NumVnodes,
+                                   need, MinVnodes}}, StateData0};
         true ->
             AllowMult = get_option(allow_mult, BucketProps),
             Options = flatten_options(Options0 ++ ?DEFAULT_OPTS, []),
@@ -475,12 +523,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                          vnode_options = VNodeOpts,
                                          timeout = Timeout},
             ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
-            case Precommit of
-                [] -> % Nothing to run, spare the timing code
-                    execute(StateData);
-                _ ->
-                    new_state_timeout(precommit, StateData)
-            end
+            StateData
     end.
 
 apply_updates(RObj0, Options) ->
@@ -495,27 +538,31 @@ apply_updates(RObj0, Options) ->
     
 
 %% Run the precommit hooks
-precommit(timeout, State = #state{precommit = []}) ->
-    execute(State);
-precommit(timeout, State = #state{precommit = [Hook | Rest], 
-                                  robj = RObj,
-                                  trace = Trace}) ->
+-spec precommit(#state{}) -> #state{} | {{'error', term()}, #state{}}.
+precommit(State = #state{precommit = []}) ->
+    State;
+precommit(State = #state{precommit = [Hook | Rest], 
+                         robj = RObj,
+                         trace = Trace}) ->
     Result = decode_precommit(invoke_hook(Hook, RObj), Trace),
     case Result of
         fail ->
             ?DTRACE(Trace, ?C_PUT_FSM_PRECOMMIT, [-1], []),
-            process_reply({error, precommit_fail}, State);
+            {{error, precommit_fail}, State};
         {fail, Reason} ->
             ?DTRACE(Trace, ?C_PUT_FSM_PRECOMMIT, [-1], 
                     [dtrace_errstr(Reason)]),
-            process_reply({error, {precommit_fail, Reason}}, State);
+            {{error, {precommit_fail, Reason}}, State};
         Result ->
             ?DTRACE(Trace, ?C_PUT_FSM_PRECOMMIT, [0], []),
-            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
-                                                precommit = Rest}, 0}
+            precommit(State#state{robj = riak_object:apply_updates(Result),
+                                  precommit = Rest})
     end.
 
+
+
 %% @private
+-spec execute(#state{}) -> {next_state, NextState::atom(), #state{}} | {{'error', term()}, #state{}}.
 execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
     %% If we are a forwarded coordinator, the originating node is expecting
     %% an ack from us.
@@ -558,6 +605,9 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
     new_state(waiting_local_vnode, StateData2).
 
 %% @private
+waiting_local_vnode(kickoff, StateData) ->
+    %% just eat it up for now - due to test init bypassing the prepare state
+    {next_state, waiting_local_vnode, StateData};
 waiting_local_vnode(request_timeout, StateData=#state{trace = Trace}) ->
     ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1], []),
     process_reply({error,timeout}, StateData);
@@ -569,7 +619,7 @@ waiting_local_vnode(Result, StateData = #state{putcore = PutCore,
             ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1],
                     [integer_to_list(Idx)]),
             %% Local vnode failure is enough to sink whole operation
-            process_reply({error, Reason}, StateData#state{putcore = UpdPutCore1});
+            {{error, Reason}, StateData#state{putcore = UpdPutCore1}};
         {w, Idx, _ReqId} ->
             ?DTRACE(Trace, ?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
                     [integer_to_list(Idx)]),
@@ -622,6 +672,9 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
 
 
 %% @private
+waiting_remote_vnode(kickoff, StateData) ->
+    %% just eat it up for now - due to test init bypassing the prepare state
+    {next_state, waiting_remote_vnode, StateData};
 waiting_remote_vnode(request_timeout, StateData=#state{trace = Trace}) ->
     ?DTRACE(Trace, ?C_PUT_FSM_WAITING_REMOTE_VNODE, [-1], []),
     process_reply({error,timeout}, StateData);
@@ -645,10 +698,10 @@ waiting_remote_vnode(Result, StateData = #state{putcore = PutCore,
     end.
 
 %% @private
-postcommit(timeout, StateData = #state{postcommit = [], trace = Trace}) ->
+postcommit(StateData = #state{postcommit = [], trace = Trace}) ->
     ?DTRACE(Trace, ?C_PUT_FSM_POSTCOMMIT, [0], []),
-    new_state_timeout(finish, StateData);
-postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
+    finish(StateData);
+postcommit(StateData = #state{postcommit = [Hook | Rest],
                                        trace = Trace,
                                        putcore = PutCore}) ->
     ?DTRACE(Trace, ?C_PUT_FSM_POSTCOMMIT, [-2], []),
@@ -656,32 +709,15 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
     %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     decode_postcommit(invoke_hook(Hook, ReplyObj), Trace),
-    {next_state, postcommit, StateData#state{postcommit = Rest,
-                                             trace = Trace,
-                                             putcore = UpdPutCore}, 0};
-%% still process hooks even if request timed out  
-postcommit(request_timeout, StateData = #state{trace = Trace}) -> 
-    ?DTRACE(Trace, ?C_PUT_FSM_POSTCOMMIT, [-3], []),
-    {next_state, postcommit, StateData, 0};
-postcommit(Reply, StateData = #state{putcore = PutCore,
-                                     trace = Trace}) ->
-    case Trace of
-        true ->
-            ShortCode = riak_kv_put_core:result_shortcode(Reply),
-            IdxStr = integer_to_list(riak_kv_put_core:result_idx(Reply)),
-            ?DTRACE(?C_PUT_FSM_POSTCOMMIT, [0, ShortCode], [IdxStr]);
-        _ ->
-            ok
-    end,
-    %% late responses - add to state.  *Does not* recompute finalobj
-    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
+    postcommit(StateData#state{postcommit = Rest,
+                               trace = Trace,
+                               putcore = UpdPutCore}).
 
-finish(timeout, StateData = #state{timing = Timing, reply = Reply,
-                                   bkey = {Bucket, _Key},
-                                   trace = Trace,
-                                   tracked_bucket = StatTracked,
-                                   options = Options}) ->
+finish(StateData = #state{timing = Timing, reply = Reply,
+                          bkey = {Bucket, _Key},
+                          trace = Trace,
+                          tracked_bucket = StatTracked,
+                          options = Options}) ->
     case Reply of
         {error, _} -> 
             ?DTRACE(Trace, ?C_PUT_FSM_FINISH, [-1], []),
@@ -698,44 +734,38 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                                       Stages, StatTracked, CRDTMod}),
             ?DTRACE(Trace, ?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
-    {stop, normal, StateData};
-finish(Reply, StateData = #state{putcore = PutCore,
-                                 trace = Trace}) ->
-    case Trace of
-        true ->
-            ShortCode = riak_kv_put_core:result_shortcode(Reply),
-            IdxStr = integer_to_list(riak_kv_put_core:result_idx(Reply)),
-            ?DTRACE(?C_PUT_FSM_FINISH, [1, ShortCode], [IdxStr]);
-        _ ->
-            ok
-    end,
-    %% late responses - add to state.  *Does not* recompute finalobj
-    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
+    {stop, normal, StateData}.
 
 
 %% @private
+handle_event({remote_executing, Node}, await_remote_coordinator, 
+             StateData=#state{current_coordinator=Node}) ->
+    %% we can now stop knowing that the desired remote put FSM has taken over
+    {stop, normal, StateData};
+handle_event({remote_executing, Node}, StateName, StateData) ->
+    late_put_fsm_coordinator_ack(Node),
+    ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
+    {next_state, StateName, StateData};
 handle_event(_Event, _StateName, StateData) ->
     {stop,badmsg,StateData}.
+
 
 %% @private
 handle_sync_event(_Event, _From, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-
-handle_info(request_timeout, StateName, StateData) ->
-    ?MODULE:StateName(request_timeout, StateData);
-handle_info({ack, Node, now_executing}, StateName, StateData) ->
-    late_put_fsm_coordinator_ack(Node),
-    ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
-    {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-terminate(Reason, _StateName, _State) ->
-    Reason.
+terminate(Exit, _StateName, #state{monitor=true})
+  when Exit==shutdown orelse Exit==normal orelse Exit==noproc ->
+  riak_kv_stat:update({fsm_exit, puts});
+terminate(_Cause, _StateName, #state{monitor=true}) ->
+  riak_kv_stat:update({fsm_error, puts});
+terminate(_, _, _) ->
+  ok.
 
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
@@ -757,27 +787,35 @@ new_state_timeout(StateName, StateData=#state{trace = true}) ->
 new_state_timeout(StateName, StateData) ->
     {next_state, StateName, StateData, 0}.
 
+process_error(ErrorReply,  StateData = #state{trace=Trace}) ->
+    StateData1 = client_reply(ErrorReply, StateData),
+    StateData2 = prepare_for_postcommit(StateData1),
+    ?DTRACE(Trace, ?C_PUT_FSM_PROCESS_REPLY, [-1], []),
+    new_state_timeout(finish, StateData2).
+
+
+prepare_for_postcommit(#state{postcommit=[]}=StateData) ->
+    StateData;
+prepare_for_postcommit(#state{putcore=PutCore}=StateData) ->
+     %% If postcommits defined, calculate final object
+     %% before any replies received after responding to
+     %% the client for a consistent view.
+     {_, UpdPutCore} = riak_kv_put_core:final(PutCore),
+     StateData#state{putcore = UpdPutCore}.
+    
+
 %% What to do once enough responses from vnodes have been received to reply
-process_reply(Reply, StateData = #state{postcommit = PostCommit,
-                                        putcore = PutCore,
-                                        robj = RObj,
+%% This function will call the postcommit/1 function which will call the finish/1 function
+%% and then the FSM will stop.
+process_reply(Reply, StateData = #state{robj = RObj,
                                         trace = Trace,
                                         bkey = {Bucket, Key}}) ->
     StateData1 = client_reply(Reply, StateData),
-    StateData2 = case PostCommit of
-                     [] ->
-                         StateData1;
-                     _ ->
-                         %% If postcommits defined, calculate final object
-                         %% before any replies received after responding to
-                         %% the client for a consistent view.
-                         {_, UpdPutCore} = riak_kv_put_core:final(PutCore),
-                         StateData1#state{putcore = UpdPutCore}
-                 end,
+    StateData2 = prepare_for_postcommit(StateData1),
     case Reply of
         ok ->
             ?DTRACE(Trace, ?C_PUT_FSM_PROCESS_REPLY, [0], []),
-            new_state_timeout(postcommit, StateData2);
+            postcommit(StateData2);
         {ok, _} ->
             Values = riak_object:get_values(RObj),
             %% TODO: more accurate sizing method
@@ -791,10 +829,10 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
                 _ ->
                     ok
             end,
-            new_state_timeout(postcommit, StateData2);
+            postcommit(StateData2);
         _ ->
             ?DTRACE(Trace, ?C_PUT_FSM_PROCESS_REPLY, [-1], []),
-            new_state_timeout(finish, StateData2)
+            finish(StateData2)
     end.
 
 
@@ -996,7 +1034,8 @@ get_option(Name, Options, Default) ->
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
-    erlang:send_after(Timeout, self(), request_timeout).
+    timer:apply_after(Timeout, ?MODULE,  request_timeout, [self()]).
+
 
 client_reply(Reply, State = #state{from = {raw, ReqId, Pid},
                                    timing = Timing0,

@@ -352,9 +352,12 @@ prop_basic_put() ->
                                                   {bucket_props, BucketProps},
                                                   {preflist2, PL2},
                                                   {coord_pl_entry, CoordPLEntry}]),
+        ZeroPutState = get_state(PutPid),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
+        FirstPutState = get_state(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
+        SecondPutState = get_state(PutPid),
         receive % check for death during postcommit hooks
             {'EXIT', PutPid, Why} ->
                 ?assertEqual(normal, Why)
@@ -420,7 +423,8 @@ prop_basic_put() ->
                io:format(user, "History: ~p\n", [H]),
                io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
                io:format(user, "PostCommits:\nExpected: ~p\nGot: ~p\n",
-                         [ExpectedPostCommits, PostCommits])
+                         [ExpectedPostCommits, PostCommits]),
+               io:format(user, "PutPid states: ~p\n~p\n~p\n", [ZeroPutState, FirstPutState, SecondPutState])
            end,
            conjunction([{result, equals(RetResult, Expected)},
                         {details, check_details(RetInfo, Options)},
@@ -428,6 +432,14 @@ prop_basic_put() ->
                         {puts_sent, check_puts_sent(ExpectedVnodePuts, H)},
                         {told_monitor, fsm_eqc_util:is_get_put_last_cast(put, PutPid)}]))
     end).
+
+get_state(Pid) ->
+    try
+        sys:get_state(Pid)
+    catch
+        _:Error ->
+            Error
+    end.
 
 make_options([], Options) ->
     Options;

@@ -388,8 +388,8 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
 %% Nuno Preguiça, Carlos Bauqero, Paulo Sérgio Almeida, Victor Fonte,
 %% and Ricardo Gonçalves. 2012
 -spec fold_contents(r_content(), merge_acc(), vclock:vclock()) -> merge_acc().
-fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
-    #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
+fold_contents({r_content, Dict, _Value}=C0, MergeAcc, Clock) ->
+    #merge_acc{drop=Drop, keep=Keep, crdt=_CRDT, error=_Error} = MergeAcc,
     case get_dot(Dict) of
         {ok, {Dot, PureDot}} ->
             case {vclock:descends_dot(Clock, Dot), is_drop_candidate(PureDot, Drop)} of
@@ -449,25 +449,28 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
             %% explosion scenarios. To avoid such scenarios we call
             %% out to CRDT logic to merge CRDTs into a single value
             %% here.
-            case riak_kv_crdt:merge_value({Dict, Value}, {CRDT, [], []}) of
-                {CRDT, [], [E]} ->
-                    %% An error occurred trying to merge this sibling
-                    %% value. This means it was CRDT with some
-                    %% corruption of the binary format, or maybe a
-                    %% user's opaque binary that happens to match the
-                    %% CRDT binary start tag. Either way, gather the
-                    %% error for later logging.
-                    MergeAcc#merge_acc{error=[E | Error]};
-                {CRDT, [{Dict, Value}], []} ->
-                    %% The sibling value was not a CRDT, but a
-                    %% (legacy?) un-dotted user opaque value. Add it
-                    %% to the list of values to keep.
-                    MergeAcc#merge_acc{keep=[C0|Keep]};
-                {CRDT2, [], []} ->
-                    %% The sibling was a CRDT and the CRDT accumulator
-                    %% has been updated.
-                    MergeAcc#merge_acc{crdt=CRDT2}
-            end
+            %%% HACK(rdb) what if we _don't_ merge CRDTs here, hmmm? How does it perform?
+            %%% @TODO(rdb) try and provoke a CRDT sibling explosion (how do you do it?)
+            MergeAcc#merge_acc{keep=[C0|Keep]}
+            %% case riak_kv_crdt:merge_value({Dict, Value}, {CRDT, [], []}) of
+            %%     {CRDT, [], [E]} ->
+            %%         %% An error occurred trying to merge this sibling
+            %%         %% value. This means it was CRDT with some
+            %%         %% corruption of the binary format, or maybe a
+            %%         %% user's opaque binary that happens to match the
+            %%         %% CRDT binary start tag. Either way, gather the
+            %%         %% error for later logging.
+            %%         MergeAcc#merge_acc{error=[E | Error]};
+            %%     {CRDT, [{Dict, Value}], []} ->
+            %%         %% The sibling value was not a CRDT, but a
+            %%         %% (legacy?) un-dotted user opaque value. Add it
+            %%         %% to the list of values to keep.
+            %%         MergeAcc#merge_acc{keep=[C0|Keep]};
+            %%     {CRDT2, [], []} ->
+            %%         %% The sibling was a CRDT and the CRDT accumulator
+            %%         %% has been updated.
+            %%         MergeAcc#merge_acc{crdt=CRDT2}
+            %% end
     end.
 
 %% Store a pure dot and it's contents as a possible candidate to be
@@ -493,7 +496,7 @@ get_drop_candidate(Dot, Dict) ->
 %% be safe.
 -spec merge_acc_to_contents(merge_acc()) -> list(r_content()).
 merge_acc_to_contents(MergeAcc) ->
-    #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
+    #merge_acc{keep=Keep, crdt=_CRDTs} = MergeAcc,
     %% Convert the non-CRDT sibling values back to dict metadata values.
     %%
     %% For improved performance, fold_contents/3 does not check for duplicates
@@ -505,13 +508,16 @@ merge_acc_to_contents(MergeAcc) ->
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
     %% accumulator only has one entry ever.
-    orddict:fold(fun(_Type, {Meta, CRDT}, {_, Contents}) ->
-                         {riak_kv_crdt:to_mod(CRDT),
-                          [{r_content, riak_kv_crdt:meta(Meta, CRDT),
-                           riak_kv_crdt:to_binary(CRDT)} | Contents]}
-                 end,
-                 {undefined, Keep2},
-                 CRDTs).
+
+    %% HACK(rdb) what if we don't deserialise and reserialise CRDTs in merge??
+    {undefined, Keep2}.
+    %% orddict:fold(fun(_Type, {Meta, CRDT}, {_, Contents}) ->
+    %%                      {riak_kv_crdt:to_mod(CRDT),
+    %%                       [{r_content, riak_kv_crdt:meta(Meta, CRDT),
+    %%                        riak_kv_crdt:to_binary(CRDT)} | Contents]}
+    %%              end,
+    %%              {undefined, Keep2},
+    %%              CRDTs).
 
 %% @private Get the dot from the passed metadata dict (if present and
 %% valid). It turns out, due to weirdness, it is possible to have two

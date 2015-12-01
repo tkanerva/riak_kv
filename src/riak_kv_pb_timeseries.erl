@@ -79,8 +79,9 @@ init() ->
        | #ddl_v1{} | #riak_sql_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
-decode(Code, Bin) ->
-    Msg = riak_pb_codec:decode(Code, Bin),
+decode(MsgCode, MsgData) ->
+    Bin = <<MsgCode/integer, MsgData/binary>>,
+    Msg = binary_to_term(Bin),
     case Msg of
         #tsqueryreq{query = Q}->
             case decode_query(Q) of

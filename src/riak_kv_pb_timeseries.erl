@@ -121,7 +121,7 @@ decode(MsgCode, MsgData) ->
 
 -spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->
-    {ok, riak_pb_codec:encode(Message)}.
+    {ok, term_to_binary(Message)}.
 
 
 -spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}

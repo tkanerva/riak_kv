@@ -35,7 +35,10 @@
          decode/2,
          encode/1,
          process/2,
-         process_stream/3]).
+         get_local_key/3,
+         get_partition_key/3,
+         test_nif_fn/3,
+	 process_stream/3]).
 
 %% NOTE: Clients will work with table names. Those names map to a
 %% bucket type/bucket name tuple in Riak, with both the type name and
@@ -72,8 +75,19 @@
 
 -spec init() -> any().
 init() ->
-    #state{}.
-
+   SoName = case code:priv_dir(?MODULE) of
+                 {error, bad_name} ->
+                     case code:which(?MODULE) of
+                         Filename when is_list(Filename) ->
+                             filename:join([filename:dirname(Filename),"../priv", "riak_kv_pb_timeseries"]);
+                         _ ->
+                             filename:join("../priv", "riak_kv_pb_timeseries")
+                     end;
+                 Dir ->
+                     filename:join(Dir, "riak_kv_pb_timeseries")
+             end,
+    io:format(user, "SoName = ~p~n", [SoName]),
+    erlang:load_nif(SoName, application:get_all_env(riak_kv_pb_timeseries)).
 
 -spec decode(integer(), binary()) ->
     {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
@@ -381,9 +395,17 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
+get_partition_key(Mod, Raw, DDL) ->
+    eleveldb_ts:encode_key(riak_ql_ddl:get_partition_key(DDL, Raw, Mod)).
+
+get_local_key(Mod, Raw, DDL) ->
+    eleveldb_ts:encode_key(riak_ql_ddl:get_local_key(DDL, Raw, Mod)).
+
+test_nif_fn(_Mod, _Raw, _DDL) ->
+    erlang:nif_error({error, not_loaded}).
+
 row_to_key(Row, DDL, Mod) ->
-    eleveldb_ts:encode_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
+    get_partition_key(Mod, Row, DDL).
 
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
@@ -410,8 +432,7 @@ add_preflists(PartitionedData, NVal, UpNodes) ->
 
 build_object(Bucket, Mod, DDL, Row, PK) ->
     Obj = Mod:add_column_info(Row),
-    LK  = eleveldb_ts:encode_key(
-            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
+    LK  = get_local_key(Mod, Row, DDL),
 
     RObj0 = riak_object:new(Bucket, PK, Obj),
     MD = riak_object:get_update_metadata(RObj0),
@@ -486,10 +507,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                    || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
             %% 2. make the PK and LK
-            PK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
-            LK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
+            PK = get_partition_key(Mod, BareValues, DDL),
+            LK = get_local_key(Mod, BareValues, DDL),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

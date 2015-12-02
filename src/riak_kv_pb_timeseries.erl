@@ -23,6 +23,8 @@
 
 -module(riak_kv_pb_timeseries).
 
+-on_load(init/0).
+
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").

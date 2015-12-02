@@ -28,13 +28,10 @@ include tools.mk
 
 nif_build := $(wildcard riak_kv_ts/Makefile)
 
-$(info nif_build wildcard is $(wildcard riak_kv_ts/Makefile) and curdir is $(CURDIR))
-
 ifneq ($(nif_build),)
 B:=$(CURDIR)
 pb_nif : $B/riak_kv_ts/compile
 
-$(info Attempt to load nif_build: $(nif_build))
 include $(nif_build)
 else
 pb_nif:

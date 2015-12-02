@@ -77,6 +77,7 @@
 -define(E_GET,               1010).
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
+-define(E_TIMEOUT,           1013).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -206,7 +207,7 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-                case make_ts_keys(CompoundKey, DDL) of
+                case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:get(
                           {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
@@ -263,7 +264,7 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-                case make_ts_keys(CompoundKey, DDL) of
+                case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:delete_vclock(
                           {Table, Table}, PKLK, VClock, Options,
@@ -334,6 +335,15 @@ submit_query(DDL, Mod, SQL, State) ->
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
+        %% the following timeouts are known and distinguished:
+        {error, qry_worker_timeout} ->
+            %% the eleveldb process didn't send us any response after
+            %% 10 sec (hardcoded in riak_kv_qry), and probably died
+            {reply, make_rpberrresp(?E_TIMEOUT, "no response from backend"), State};
+        {error, backend_timeout} ->
+            %% the eleveldb process did manage to send us a timeout
+            %% response
+            {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
@@ -349,6 +359,8 @@ decode_query(#tsinterpolation{ base = BaseQuery }) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     riak_ql_parser:parse(Lexed).
 
+decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
+    flat_format("~ts", [Msg]);
 decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
     flat_format("Unexpected token '~p'", [Token]);
 decoder_parse_error_resp(Error) ->
@@ -426,17 +438,21 @@ put_data(Data, Table, Mod) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_partition_key(DDL, Raw)),
+                      riak_ql_ddl:get_partition_key(DDL, Raw, Mod)),
               LK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_local_key(DDL, Raw)),
+                      riak_ql_ddl:get_local_key(DDL, Raw, Mod)),
 
-              RObj0 = riak_object:new(table_to_bucket(Table), PK, Obj),
+              Bucket = table_to_bucket(Table),
+
+              RObj0 = riak_object:new(Bucket, PK, Obj),
               MD = riak_object:get_update_metadata(RObj0),
-              MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
-              MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
-              RObj = riak_object:update_metadata(RObj0, MD2),
+              MD1 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD),
+              RObj = riak_object:update_metadata(RObj0, MD1),
 
-              case riak_kv_w1c_worker:async_put(RObj, []) of
+              EncodeFn = fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
+
+              case riak_kv_w1c_worker:async_put(
+                     RObj, Bucket, {PK, LK}, EncodeFn, []) of
                   {error, _Why} ->
                       {ReqIdsAcc, ErrorsCnt + 1};
                   {ok, ReqId} ->
@@ -449,10 +465,10 @@ put_data(Data, Table, Mod) ->
                            (_) -> false
                         end, Responses)) + FailReqs.
 
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}) ->
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
                           {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}) ->
+                                        fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
@@ -470,9 +486,9 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 
             %% 2. make the PK and LK
             PK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_partition_key(DDL, BareValues)),
+                   riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
             LK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_local_key(DDL, BareValues)),
+                   riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

@@ -928,8 +928,13 @@ to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
 to_legacy_first_key(Other) ->
     to_first_key(Other).
 
+encode(Arg1) ->
+    term_to_binary(Arg1).
+encode(Arg1, _Arg2) ->
+    term_to_binary(Arg1).
+
 to_object_key(Bucket, Key) ->
-    sext:encode({o, Bucket, Key}).
+    encode({o, Bucket, Key}).
 
 from_object_key(LKey) ->
     case (catch sext:decode(LKey)) of
@@ -943,10 +948,10 @@ from_object_key(LKey) ->
     end.
 
 to_index_key(Bucket, Key, Field, Term) ->
-    sext:encode({i, Bucket, Field, Term, Key}).
+    encode({i, Bucket, Field, Term, Key}).
 
 to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum encoding
-    sext:encode({i, Bucket, Field, Term, Key}, true).
+    encode({i, Bucket, Field, Term, Key}, true).
 
 from_index_key(LKey) ->
     case (catch sext:decode(LKey)) of
@@ -961,7 +966,7 @@ from_index_key(LKey) ->
 
 %% @doc Encode a key to store partition meta-data attributes.
 to_md_key(Key) ->
-    sext:encode({md, Key}).
+    encode({md, Key}).
 
 
 %% ===================================================================

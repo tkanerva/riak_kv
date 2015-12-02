@@ -847,9 +847,12 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
     case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
-            {noreply, State#state{modstate=UpModState}};
+            w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS, State),
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
-            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}};
+        {Context, UpModState} ->
+            {noreply, State#state{modstate=UpModState}}
     end;
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
@@ -1292,12 +1295,15 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx}) ->
+w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS, State=#state{idx=Idx}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
     ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+    update_vnode_stats(vnode_put, Idx, StartTS).
+
+handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
+            State) ->
+    w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS, State),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
-    update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->

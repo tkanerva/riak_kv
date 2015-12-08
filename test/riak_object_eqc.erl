@@ -46,7 +46,7 @@ prop_roundtrip() ->
 
 riak_object_bin() ->
     ?LET({Obj, Vsn},
-         {fsm_eqc_util:riak_object(), binary_version()},
+         {oneof([fsm_eqc_util:riak_object(), fsm_eqc_util:riak_ts_object()]), binary_version()},
          {riak_object:bucket(Obj),
           riak_object:key(Obj),
           riak_object:to_binary(Vsn, Obj),

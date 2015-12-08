@@ -37,6 +37,14 @@ bkey() ->
     {non_blank_string(),  %% bucket
      non_blank_string()}. %% key
 
+bkey_ts() ->
+    {non_empty(binary()),  %% bucket
+        {non_empty(binary()), %% family
+         non_empty(binary()), %% series
+         timestamp()         %% timestamp
+        }}.
+
+timestamp() -> ?LET(X, nat(), 1449531227 + X).
 non_blank_string() ->
     ?LET(X,not_empty(list(lower_char())), list_to_binary(X)).
 
@@ -65,11 +73,33 @@ increment(Actor, Count, Vclock) ->
       lists:duplicate(Count, Actor)).
 
 riak_object() ->
-    ?LET({{Bucket, Key}, Vclock, Value},
-         {bkey(), vclock(), binary()},
-         riak_object:set_vclock(
-           riak_object:new(Bucket, Key, Value),
-           Vclock)).
+    ?LET({{Bucket, Key}, Vclock, Value, Meta},
+        {bkey(), vclock(), object_value(), oneof([[], [{binary(), object_value()}]])},
+        %% TODO: The above oneof() should really be the below list(), but
+        %% because dicts don't serialize/deserialize deterministically,
+        %% riak_object_eqc:prop_roundtrip will fail if we put the list in now.
+        riak_object:set_vclock(
+            riak_object:new(Bucket, Key, Value, dict:from_list(Meta)),
+            Vclock)).
+
+riak_ts_object() ->
+    ?LET({{Bucket, Key}, Vclock, Value, Meta},
+        {noshrink(bkey_ts()), vclock(), object_value(), oneof([[], [{binary(), object_value()}]])},
+        %% TODO: The above oneof() should really be the below list(), but
+        %% because dicts don't serialize/deserialize deterministically,
+        %% riak_object_eqc:prop_roundtrip will fail if we put the list in now.
+        riak_object:set_vclock(
+            riak_object:newts(Bucket, Key, Value, dict:from_list(Meta)),
+            Vclock)).
+
+object_value() ->
+    oneof([binary(), erlang_term()]).
+
+erlang_term() ->
+    oneof([gen_atom(), nat(), binary(), {?LAZY(erlang_term()), ?LAZY(erlang_term())}]).
+
+gen_atom() -> % a,q seems to be the minimum provoking example for atoms
+    elements([a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z]).
 
 maybe_tombstone() ->
     weighted_default({2, notombstone}, {1, tombstone}).

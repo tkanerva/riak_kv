@@ -109,6 +109,9 @@
 -define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
 -endif.
 
+timestamp() ->
+    riak_kv_pb_timeseries:gettime().
+
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
                 reqid :: term(),
@@ -368,7 +371,7 @@ get_vclocks(Preflist, BKeyList) ->
 
 %% @doc Get status information about the node local vnodes.
 vnode_status(PrefLists) ->
-    ReqId = erlang:phash2({self(), os:timestamp()}),
+    ReqId = erlang:phash2({self(), timestamp()}),
     %% Get the status of each vnode
     riak_core_vnode_master:command(PrefLists,
                                    ?KV_VNODE_STATUS_REQ{},
@@ -554,7 +557,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                            start_time=StartTime,
                            options=Options},
                Sender, State=#state{idx=Idx}) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
     {_Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -850,7 +853,7 @@ handle_command({get_index_entries, Opts},
 
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
     case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
@@ -860,7 +863,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     end;
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
@@ -1156,7 +1159,7 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
                         req_id=ReqId,
                         start_time=StartTime,
                         options=Options} = Req,
-            StartTS = os:timestamp(),
+            StartTS = timestamp(),
             riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
             {Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
             update_vnode_stats(vnode_put, Idx, StartTS),
@@ -1736,7 +1739,7 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
     {Reply, State#state{modstate=UpdModState}}.
 
 actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
     Result.
@@ -1819,7 +1822,7 @@ put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
 %% @private
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
     case Retval of
         {ok, Obj} ->
@@ -2167,7 +2170,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx}) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     maybe_cache_evict(BKey, StateData),
@@ -2306,7 +2309,7 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
 -spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
-    ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
+    ok = riak_kv_stat:update({Op, Idx, timer:now_diff( timestamp(), StartTS)}).
 
 %% @private
 update_index_write_stats(false, _IndexSpecs) ->
@@ -2550,7 +2553,7 @@ maybe_cache_evict(BKey, #state{md_cache = MDCache}) ->
     end.
 
 insert_md_cache(Table, MaxSize, BKey, MD) ->
-    TS = os:timestamp(),
+    TS = timestamp(),
     case ets:insert(Table, {TS, BKey, MD}) of
         true ->
             Size = ets:info(Table, memory),
@@ -2649,14 +2652,14 @@ blocking_lease_counter(_State, {MaxErrs, MaxErrs, _MaxTime}) ->
 blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
     #state{idx=Index, vnodeid=VId, status_mgr_pid=Pid, counter=CounterState} = State,
     #counter_state{lease_size=LeaseSize, use=UseEpochCounter} = CounterState,
-    Start = os:timestamp(),
+    Start = timestamp(),
     receive
         {'EXIT', Pid, Reason} ->
             lager:error("Failed to lease counter for ~p : ~p", [Index, Reason]),
             {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index, UseEpochCounter),
             ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize),
             NewState = State#state{status_mgr_pid=NewPid},
-            Elapsed = timer:now_diff(os:timestamp(), Start),
+            Elapsed = timer:now_diff(timestamp(), Start),
             blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
         {counter_lease, {Pid, VId, NewLease}} ->
             NewCS = CounterState#counter_state{lease=NewLease, leasing=false},

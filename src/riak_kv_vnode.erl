@@ -841,13 +841,20 @@ handle_command({get_index_entries, Opts},
     end;
 
 %% NB. The following two function clauses discriminate on the async_put State field
+
+%------------------------------------------------------------
+% In this test branch, I've replaced the async_put with a
+% call to sync_put, which makes no reply. This call therefore replies
+% explicitly on success or error
+%------------------------------------------------------------
+
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
-    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
-            {noreply, State#state{modstate=UpModState}};
+	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end;

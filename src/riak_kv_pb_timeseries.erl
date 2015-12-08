@@ -39,6 +39,7 @@
          process/2,
          get_local_key/3,
          get_partition_key/3,
+	 gettime/0,
          test_nif_fn/3,
 	 process_stream/3]).
 
@@ -405,6 +406,9 @@ get_local_key(Mod, Raw, DDL) ->
     eleveldb_ts:encode_key(riak_ql_ddl:get_local_key(DDL, Raw, Mod)).
 
 test_nif_fn(_Mod, _Raw, _DDL) ->
+    erlang:nif_error({error, not_loaded}).
+
+gettime() ->
     erlang:nif_error({error, not_loaded}).
 
 row_to_key(Row, DDL, Mod) ->

@@ -31,11 +31,13 @@
 //
 ERL_NIF_TERM EncodePartitionKey(ErlNifEnv* Env, int Argc, const ERL_NIF_TERM Argv[]);
 ERL_NIF_TERM EncodeLocalKey(ErlNifEnv* Env, int Argc, const ERL_NIF_TERM Argv[]);
+ERL_NIF_TERM GetTime(ErlNifEnv* Env, int Argc, const ERL_NIF_TERM Argv[]);
 
 static ErlNifFunc function_map[] =
 {
     {"get_partition_key", 3, EncodePartitionKey},
     {"get_local_key",     3, EncodeLocalKey}
+    {"gettime",           0, GetTime}
 };
 
 static int
@@ -143,3 +145,40 @@ EncodeLocalKey(
     return(enif_make_binary(Env, &key));
 
 }   // EncodeLocalKey
+
+ERL_NIF_TERM
+GetTime(
+    ErlNifEnv* Env,
+    int Argc,
+    const ERL_NIF_TERM Argv[])
+{
+    ErlNifSInt64 megaSec;
+    ErlNifSInt64 sec;
+    ErlNifSInt64 microSec;
+
+#if _POSIX_TIMERS >= 200801L
+
+    struct timespec ts;
+
+    // this is rumored to be faster that gettimeofday(), and sometimes                                                             
+    // shift less ... someday use CLOCK_MONOTONIC_RAW                                                                              
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    megaSec  = ts.tv_sec/1000000;
+    sec      = ts.tv_sec - megaSec*1000000;
+    microSec = ts.tv_nsec / 1000;
+
+#else
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    megaSec = tv.tv_sec/1000000;
+    sec     = tv.tv_sec - megaSec*1000000;
+    microSec= tv.tv_usec;
+
+#endif
+
+    return enif_make_tuple3(Env, enif_make_int64(Env, megaSec), enif_make_int64(Env, sec), enif_make_int64(Env, microSec));
+}

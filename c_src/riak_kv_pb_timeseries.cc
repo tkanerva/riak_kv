@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 #include "erl_nif.h"
 #include "erl_driver.h"
 
@@ -36,7 +37,7 @@ ERL_NIF_TERM GetTime(ErlNifEnv* Env, int Argc, const ERL_NIF_TERM Argv[]);
 static ErlNifFunc function_map[] =
 {
     {"get_partition_key", 3, EncodePartitionKey},
-    {"get_local_key",     3, EncodeLocalKey}
+    {"get_local_key",     3, EncodeLocalKey},
     {"gettime",           0, GetTime}
 };
 

@@ -26,6 +26,16 @@ decode_tsputreq_equivalent_test_() ->
       ?_assertEqual(true, quickcheck(eqc:testing_time(10, ?QC_OUT(
                                      prop_decode_tsputreq_equivalent()))))}.
 
+decode_tsputreq_truncate_test_() ->
+    {timeout, 15000, % do not trust the docs - timeout is in msec
+      ?_assertEqual(true, quickcheck(eqc:testing_time(5, ?QC_OUT(
+                                     prop_decode_tsputreq_truncate()))))}.
+decode_tsputreq_fuzz_test_() ->
+    {timeout, 15000, % do not trust the docs - timeout is in msec
+      ?_assertEqual(true, quickcheck(eqc:testing_time(5, ?QC_OUT(
+                                     prop_decode_tsputreq_fuzz()))))}.
+
+
 encode_tsqueryresp_equivalent_test_() ->
     {timeout, 15000, % do not trust the docs - timeout is in msec
       ?_assertEqual(true, quickcheck(eqc:testing_time(10, ?QC_OUT(
@@ -35,6 +45,16 @@ decode_tsqueryresp_equivalent_test_() ->
     {timeout, 15000, % do not trust the docs - timeout is in msec
       ?_assertEqual(true, quickcheck(eqc:testing_time(10, ?QC_OUT(
                                      prop_decode_tsqueryresp_equivalent()))))}.
+
+decode_tsqueryresp_truncate_test_() ->
+    {timeout, 15000, % do not trust the docs - timeout is in msec
+      ?_assertEqual(true, quickcheck(eqc:testing_time(5, ?QC_OUT(
+                                     prop_decode_tsqueryresp_truncate()))))}.
+decode_tsqueryresp_fuzz_test_() ->
+    {timeout, 15000, % do not trust the docs - timeout is in msec
+      ?_assertEqual(true, quickcheck(eqc:testing_time(5, ?QC_OUT(
+                                     prop_decode_tsqueryresp_fuzz()))))}.
+
 
 %% ====================================================================
 %% Generators
@@ -137,6 +157,95 @@ prop_decode_tsqueryresp_equivalent() ->
             end).
 
 
+%%
+%% Generate valid encodings and truncate
+%%
+prop_decode_tsqueryresp_truncate() ->
+    ?FORALL({TSQueryResp, TruncSeed},
+            {gen_tsqueryresp(), nat()},
+            begin
+                %% Generate a plausible encoding then truncate it.  It may
+                %% truncate on a field boundary and be safe
+                TSQueryRespBin0 = iolist_to_binary(riak_ts_pb:encode_tsqueryresp(TSQueryResp)),
+                TSQueryRespBin = case TSQueryRespBin0 of
+                                     <<>> ->
+                                         TSQueryRespBin0;
+                                     _ ->
+                                         TruncLen = 1 + (TruncSeed rem (size(TSQueryRespBin0) -1)),
+                                         binary_part(TSQueryRespBin0, {0, TruncLen})
+                                 end,
+                ErlTerm = try
+                              riak_ts_pb:decode_tsqueryresp(TSQueryRespBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                MsgCode = riak_pb_messages:msg_code(tsqueryresp),
+                NifTerm = try
+                              riak_pb_codec:decode(MsgCode, TSQueryRespBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                case TSQueryRespBin of
+                    <<>> ->   %% Erlang code decodes to atom name, NIF decodes to record
+                        true; %% but still worth checking it doesn't explode
+                    _ ->
+                        equals(ErlTerm, NifTerm)
+                end
+            end).
+
+%%
+%% Decode random binaries hunting for SEGV/other nasties
+%% This ended up more complciated than the other _fuzz test
+%% as the both decoders were more permissive
+%%
+prop_decode_tsqueryresp_fuzz() ->
+    ?FORALL(TSQueryRespBin,
+            non_empty(eqc_gen:largebinary()),
+            begin
+                %% Generate a random binary while looking for faults
+                {ErlTerm,ErlBin} =
+                    try
+                        ET=riak_ts_pb:decode_tsqueryresp(TSQueryRespBin),
+                        {ET, riak_ts_pb:encode_tsqueryresp(ET)}
+                    catch
+                        _:_ ->
+                            {error, error}
+                    end,
+                MsgCode = riak_pb_messages:msg_code(tsqueryresp),
+                {NifTerm,NifBin} =
+                    try
+                        NT=riak_pb_codec:decode(MsgCode, TSQueryRespBin),
+                        <<MsgCode:8, NifBin0/binary>> = riak_pb_codec:encode_tsqueryresp(NT),
+                        {NT, NifBin0}
+                    catch
+                        _:_ ->
+                            {error, error}
+                    end,
+                case TSQueryRespBin of
+                    <<>> ->   %% Erlang code decodes to atom name, NIF decodes to record
+                        true; %% but still worth checking it doesn't explode
+                    _ ->
+                        %% Erlang decoder seems to be more tolerant of crap,
+                        %% this is a negative test so just check both are errors.
+                        %% If they can round trip back to the binary exactly,
+                        %% expect the other one to.
+                        case {ErlTerm, NifTerm} of
+                            {error, error} ->
+                                true;
+                            {error, _} ->
+                                %% It is an error if it can roundtrip, so ok
+                                %% if the two are different.
+                                TSQueryRespBin /= NifBin;
+                            {_, error} ->
+                                TSQueryRespBin /= ErlBin;
+                            _ ->
+                                equals(ErlTerm, NifTerm)
+                        end
+                end
+            end).
+
 %% ====================================================================
 %% riak_kv_pb_timeseries.cc eqc property
 %% ====================================================================
@@ -157,6 +266,67 @@ prop_decode_tsputreq_equivalent() ->
                 end
             end).
 
+
+prop_decode_tsputreq_truncate() ->
+    ?FORALL({TSPutReq, TruncSeed},
+            {gen_tsputreq(), nat()},
+            begin
+                %% Generate a plausible encoding then truncate it.  It may
+                %% truncate on a field boundary and be safe
+                TSPutReqBin0 = iolist_to_binary(riak_ts_pb:encode_tsputreq(TSPutReq)),
+                TSPutReqBin = case TSPutReqBin0 of
+                                  <<>> ->
+                                      TSPutReqBin0;
+                                  _ ->
+                                      TruncLen = 1 + (TruncSeed rem (size(TSPutReqBin0) -1)),
+                                      binary_part(TSPutReqBin0, {0, TruncLen})
+                              end,
+                ErlTerm = try
+                              riak_ts_pb:decode_tsputreq(TSPutReqBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                MsgCode = riak_pb_messages:msg_code(tsputreq),
+                NifTerm = try
+                              riak_pb_codec:decode(MsgCode, TSPutReqBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                case TSPutReqBin of
+                    <<>> ->   %% Erlang code decodes to atom name, NIF decodes to record
+                        true; %% but still worth checking it doesn't explode
+                    _ ->
+                        equals(ErlTerm, NifTerm)
+                end
+            end).
+
+prop_decode_tsputreq_fuzz() ->
+    ?FORALL(TSPutReqBin,
+            non_empty(eqc_gen:largebinary()),
+            begin
+                %% Generate a random binary while looking for faults
+                ErlTerm = try
+                              riak_ts_pb:decode_tsputreq(TSPutReqBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                MsgCode = riak_pb_messages:msg_code(tsputreq),
+                NifTerm = try
+                              riak_pb_codec:decode(MsgCode, TSPutReqBin)
+                          catch
+                              _:_ ->
+                                  error
+                          end,
+                case TSPutReqBin of
+                    <<>> ->   %% Erlang code decodes to atom name, NIF decodes to record
+                        true; %% but still worth checking it doesn't explode
+                    _ ->
+                        equals(ErlTerm, NifTerm)
+                end
+            end).
 %%
 %% Differences, cannot encode empty description/rows.
 %%

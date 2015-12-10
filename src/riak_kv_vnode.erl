@@ -855,13 +855,13 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end;
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-                _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
-    StartTS = timestamp(),
+                _From, State=#state{idx=_Idx, mod=Mod, async_put=false, modstate=ModState}) ->
+    _StartTS = timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
 %            update_hashtree(Bucket, Key, EncodedVal, State),
 %            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
-            update_vnode_stats(vnode_put, Idx, StartTS),
+%            update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}

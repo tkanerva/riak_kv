@@ -102,6 +102,9 @@ put(RObj0, Options) ->
             Error
     end.
 
+timestamp() ->
+    riak_kv_pb_timeseries:gettime().
+
 -spec async_put(RObj :: riak_object:riak_object(),
                 W :: pos_integer(),
                 PW :: pos_integer(),
@@ -115,7 +118,7 @@ put(RObj0, Options) ->
 async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
     async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
 async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
-    StartTS = os:timestamp(),
+    StartTS = timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
@@ -134,7 +137,7 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
 -spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).
 async_put_replies(ReqIdTuples, Options) ->
-    async_put_reply_loop(ReqIdTuples, [], os:timestamp(),
+    async_put_reply_loop(ReqIdTuples, [], timestamp(),
                          find_put_timeout(Options)).
 
 
@@ -198,7 +201,7 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
                 true ->
                     reply(From, ReqId, response(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, Errors1, length(Errors))),
                     {_, NewState} = erase_request_record(ReqId, State),
-                    Usecs = timer:now_diff(os:timestamp(), StartTS),
+                    Usecs = timer:now_diff(timestamp(), StartTS),
                     riak_kv_stat:update({write_once_put, Usecs, Size});
                 false ->
                     NewRec = Rec#rec{
@@ -396,7 +399,7 @@ non_neg(X) ->
 
 remaining_put_timeout(Start, Timeout) ->
     MicroSecondsSinceStart =
-        non_neg(trunc(timer:now_diff(os:timestamp(), Start))),
+        non_neg(trunc(timer:now_diff(timestamp(), Start))),
     %% Convert to milliseconds before calculating the new timeout
     non_neg(Timeout - (MicroSecondsSinceStart div 1000)).
 

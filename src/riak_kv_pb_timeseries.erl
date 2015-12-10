@@ -35,6 +35,7 @@
          decode/2,
          encode/1,
          process/2,
+	 gettime/0,
          process_stream/3]).
 
 %% NOTE: Clients will work with table names. Those names map to a
@@ -76,8 +77,19 @@
 
 -spec init() -> any().
 init() ->
-    #state{}.
-
+   SoName = case code:priv_dir(?MODULE) of
+                 {error, bad_name} ->
+                     case code:which(?MODULE) of
+                         Filename when is_list(Filename) ->
+                             filename:join([filename:dirname(Filename),"../priv", "riak_kv_pb_timeseries"]);
+                         _ ->
+                             filename:join("../priv", "riak_kv_pb_timeseries")
+                     end;
+                 Dir ->
+                     filename:join(Dir, "riak_kv_pb_timeseries")
+             end,
+    io:format(user, "SoName = ~p~n", [SoName]),
+    erlang:load_nif(SoName, application:get_all_env(riak_kv_pb_timeseries)).
 
 -spec decode(integer(), binary()) ->
     {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
@@ -454,6 +466,9 @@ to_string(X) ->
 
 %% ---------------------------------------------------
 % functions supporting INSERT
+
+gettime() ->
+    erlang:nif_error({error, not_loaded}).
 
 row_to_key(Row, DDL, Mod) ->
     riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, Row, Mod)).

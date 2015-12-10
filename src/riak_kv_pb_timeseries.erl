@@ -74,6 +74,7 @@
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
+-on_load(init/0).
 
 -spec init() -> any().
 init() ->
@@ -90,8 +91,6 @@ init() ->
              end,
     io:format(user, "SoName = ~p~n", [SoName]),
     erlang:load_nif(SoName, application:get_all_env(riak_kv_pb_timeseries)).
-
--on_load(init/0).
 
 -spec decode(integer(), binary()) ->
     {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}

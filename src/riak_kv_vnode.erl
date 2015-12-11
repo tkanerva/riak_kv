@@ -1251,7 +1251,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
+handle_info({{w1c_async_put, From, Type, _Bucket, _Key, _EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
 %    update_hashtree(Bucket, Key, EncodedVal, State),
 %    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),

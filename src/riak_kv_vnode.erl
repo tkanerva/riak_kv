@@ -859,8 +859,8 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     StartTS = timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
-%            update_hashtree(Bucket, Key, EncodedVal, State),
-%            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1253,8 +1253,8 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
-    update_hashtree(Bucket, Key, EncodedVal, State),
-    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+%    update_hashtree(Bucket, Key, EncodedVal, State),
+%    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};

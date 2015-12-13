@@ -49,6 +49,20 @@
 %% more utility functions for where TS and non-TS keys are dealt with
 %% equally.
 -export([pk/1, lk/1]).
+-export([decode_tsputreq/1,
+         encode_tsqueryresp/1]).
+
+%% The protobuf message ID for a timeseries put request, needed to
+%% allow our nif interface to identify the message for which we wish
+%% to perform optimized decoding.
+-define(TIMESERIES_PUT_REQ, 92).
+
+%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
+-record(tsputreq2, {
+    table = erlang:error({required, table}),
+    columns = [],
+    rows = []
+}).
 
 -record(state, {
           req,
@@ -74,16 +88,56 @@
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
 
+-on_load(load_nif/0).
+load_nif() ->
+    SoName = case code:priv_dir(riak_kv_ts) of
+                 {error, bad_name} ->
+                     case code:which(?MODULE) of
+                         Filename when is_list(Filename) ->
+                             filename:join([filename:dirname(Filename),"../priv", ?MODULE]);
+                         _ ->
+                             filename:join("../priv", ?MODULE)
+                     end;
+                 Dir ->
+                     filename:join(Dir, ?MODULE)
+             end,
+    case erlang:load_nif(SoName, 0) of
+        ok ->
+            error_logger:info_msg("Loaded accelerated ~p NIF\n", [?MODULE]),
+            ok;
+        Error ->
+            error_logger:error_msg("Unable to load accelerated ~p NIF - ~p.\n"
+                                   "Safely reverting to default code",
+                                   [SoName, Error])
+    end,
+    ok.
+
 -spec init() -> any().
 init() ->
     #state{}.
 
 
+%%
+%% this is the default function that executes if NIF not present
+%%  this function decodes to tsputreq, NIF decodes to tsputreq2
+decode_tsputreq(Bin) ->
+    riak_pb_codec:decode(?TIMESERIES_PUT_REQ, Bin).
+
+%%
+%% this is the default function that executes if NIF not present
+%%  this function encodes tsqueryresp
+encode_tsqueryresp(Message) ->
+    riak_pb_codec:encode(Message).
+
 -spec decode(integer(), binary()) ->
-    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+    {ok, #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
        | #ddl_v1{} | #riak_sql_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
+decode(?TIMESERIES_PUT_REQ, Bin) ->
+    Msg=decode_tsputreq(Bin),
+    {ok, Msg, {"riak_kv.ts_put", extract_table(Msg)}};
+
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -109,18 +163,21 @@ decode(Code, Bin) ->
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
+encode(#tsqueryresp{}=Message) ->
+    {ok, encode_tsqueryresp(Message)};
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+-spec process(atom() | #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+process(#tsputreq2{rows = []}, State) ->
+    {reply, #tsputresp{}, State};
+process(#tsputreq2{table = Table, columns = _Columns, rows = Data}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    Data = riak_pb_ts_codec:decode_rows(Rows),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
     case (catch Mod:validate_obj(hd(Data))) of
@@ -147,6 +204,10 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
 
+%% convert 3rd field making #tsputreq into #tsputreq2
+process(#tsputreq{table = Bucket, columns = Columns, rows = Rows}, State) ->
+    Data = riak_pb_ts_codec:decode_rows(Rows),
+    process(#tsputreq2{table = Bucket, columns = Columns, rows = Data}, State);
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
@@ -596,6 +657,11 @@ lk({_PK, LK}) ->
 lk(NonTSKey) ->
     NonTSKey.
 
+
+extract_table(#tsputreq2{table=Table}) ->
+    Table;
+extract_table(#tsputreq{table=Table}) ->
+    Table.
 
 
 -ifdef(TEST).

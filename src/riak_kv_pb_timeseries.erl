@@ -420,19 +420,16 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
-row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
-
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
                      BucketProps :: proplists:proplist(),
-                     DDL :: #ddl_v1{},
                      Mod :: module()) ->
-                            list(tuple(non_neg_integer(), list(term()))).
-partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
+                            [{non_neg_integer(), riak_object:value()}].
+partition_data(Data, Bucket, BucketProps, Mod) ->
     PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
-                                     BucketProps), R } || R <- Data ],
+        [partition_tuple(Mod, Row, Bucket, BucketProps) || Row <- Data],
+    % TODO work out what this dict doing, filtering dupe keys?
+    % FIXME probably should be silent!
     dict:to_list(
       lists:foldl(fun({Idx, R}, Dict) ->
                           dict:append(Idx, R, Dict)
@@ -440,15 +437,20 @@ partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
                   dict:new(),
                   PartitionTuples)).
 
+partition_tuple(Mod, Row, Bucket, BucketProps) ->
+    Key = Mod:get_partition_key(Row),
+    CHash = riak_core_util:chash_key({Bucket, Key}, BucketProps),
+    {CHash, Row}.
+
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
                                    riak_core_apl:get_apl_ann(Idx, NVal, UpNodes),
                                    Rows} end,
               PartitionedData).
 
-build_object(Bucket, Mod, DDL, Row, PK) ->
+build_object(Bucket, Mod, Row, PK) ->
     Obj = Mod:add_column_info(Row),
-    LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, Row, Mod)),
+    LK  = Mod:get_local_key(Row),
 
     RObj = riak_object:newts(Bucket, PK, Obj,
                              dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
@@ -458,13 +460,11 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
-    DDL = Mod:get_ddl(),
-
     Bucket = table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
 
-    PartitionedData = partition_data(Data, Bucket, BucketProps, DDL, Mod),
+    PartitionedData = partition_data(Data, Bucket, BucketProps, Mod),
     PreflistData = add_preflists(PartitionedData, NVal,
                                  riak_core_node_watcher:nodes(riak_kv)),
 
@@ -480,7 +480,7 @@ put_data(Data, Table, Mod) ->
                           lists:foldl(
                             fun(Record, {PartReqIds, PartErrors}) ->
                                     {RObj, LK} =
-                                        build_object(Bucket, Mod, DDL,
+                                        build_object(Bucket, Mod,
                                                      Record, DocIdx),
 
                                     {ok, ReqId} =
@@ -503,8 +503,10 @@ put_data(Data, Table, Mod) ->
 
 -spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
                           {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
-make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}, Mod) ->
+make_ts_keys(CompoundKey, 
+             #ddl_v1{local_key = #key_v1{ast = LKParams},
+                     fields = Fields},
+             Mod) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
@@ -521,8 +523,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                    || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
             %% 2. make the PK and LK
-            PK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
-            LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
+            PK  = Mod:get_partition_key(BareValues),
+            LK  = Mod:get_local_key(BareValues),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

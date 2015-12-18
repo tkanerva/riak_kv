@@ -55,11 +55,19 @@
           req_ctx,
           column_info
          }).
+
 %% The protobuf message ID for a timeseries put request, needed to
 %% allow our nif interface to identify the message for which we wish
 %% to perform optimized decoding.
 -define(TIMESERIES_PUT_REQ, 92).
 
+
+%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
+-record(tsputreq2, {
+    table = erlang:error({required, table}),
+    columns = [],
+    rows = []
+}).
 
 %% C++ protocol buffer return object, looks like tsputreq, but rows is different format
 -record(tsputreq2, {

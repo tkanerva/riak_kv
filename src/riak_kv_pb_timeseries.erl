@@ -69,13 +69,6 @@
     rows = []
 }).
 
-%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
--record(tsputreq2, {
-    table = erlang:error({required, table}),
-    columns = [],
-    rows = []
-}).
-
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
 -define(E_FETCH,             1002).
@@ -91,17 +84,6 @@
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
 
-%% The protobuf message ID for a timeseries put request, needed to
-%% allow our nif interface to identify the message for which we wish
-%% to perform optimized decoding.
--define(TIMESERIES_PUT_REQ, 92).
-
-%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
--record(tsputreq2, {
-    table = erlang:error({required, table}),
-    columns = [],
-    rows = []
-}).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 

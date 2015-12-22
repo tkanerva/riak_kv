@@ -80,7 +80,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+    {ok, #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
        | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
@@ -100,6 +100,8 @@ decode(Code, Bin) ->
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_put", Table}};
+        #tsttbputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
@@ -121,6 +123,39 @@ process(#tsputreq{rows = []}, State) ->
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Data = riak_pb_ts_codec:decode_rows(Rows),
+    %% validate only the first row as we trust the client to send us
+    %% perfectly uniform data wrt types and order
+    case (catch Mod:validate_obj(hd(Data))) of
+        true ->
+            %% however, prevent bad data to crash us
+            try
+                case put_data(Data, Table, Mod) of
+                    0 ->
+                        {reply, #tsputresp{}, State};
+                    ErrorCount ->
+                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
+                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
+                end
+            catch
+                Class:Exception ->
+                    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+                    {reply, Error, State}
+            end;
+        false ->
+            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
+        {_, {undef, _}} ->
+            BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+            {reply, missing_helper_module(Table, BucketProps), State}
+    end;
+
+process(#tsttbputreq{rows = []}, State) ->
+    {reply, #tsputresp{}, State};
+process(#tsttbputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+
+    Mod = riak_ql_ddl:make_module_name(Table),
+    Data = Rows,
+
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
     case (catch Mod:validate_obj(hd(Data))) of

@@ -148,7 +148,7 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 
 %% @private
 init([From, Bucket, Key, Options0, Monitor]) ->
-    StartNow = os:timestamp(),
+    StartNow = riak_kv_pb_timeseries:timestamp(),
     Options = proplists:unfold(Options0),
     StateData = #state{from = From,
                        options = Options,

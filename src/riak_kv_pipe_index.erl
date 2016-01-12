@@ -69,7 +69,7 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
         {Bucket, Query} ->
             FilterVNodes = []
     end,
-    ReqId = erlang:phash2({self(), os:timestamp()}), % stolen from riak_client
+    ReqId = erlang:phash2({self(), riak_kv_pb_timeseries:timestamp()}), % stolen from riak_client
     riak_core_vnode_master:coverage(
       riak_kv_index_fsm:req(Bucket, none, Query),
       {Partition, node()},
@@ -174,7 +174,7 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
                                 {sink_type, {fsm, Period, infinity}}]),
 
     %% setup the cover operation
-    ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
+    ReqId = erlang:phash2({self(), riak_kv_pb_timeseries:timestamp()}), %% stolen from riak_client
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(

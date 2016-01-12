@@ -138,7 +138,7 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                             ?MD_LINKS ->
                                 {Key, [{{B, K}, Tag} || [B, K, Tag] <- Val]};
                             ?MD_LASTMOD ->
-                                {Key, os:timestamp()};
+                                {Key, riak_kv_pb_timeseries:timestamp()};
                             _ ->
                                 {Key, if
                                           is_binary(Val) ->

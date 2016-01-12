@@ -328,7 +328,7 @@ update_object(RObj, CRDTs, SiblingValues) ->
     riak_object:set_contents(RObj, CRDTSiblings ++ SiblingValues).
 
 meta(undefined, ?CRDT{ctype=CType}) ->
-    Now = os:timestamp(),
+    Now = riak_kv_pb_timeseries:timestamp(),
     M = dict:new(),
     M2 = dict:store(?MD_LASTMOD, Now, M),
     M3 = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2),

@@ -645,7 +645,7 @@ get_build_time(Tree) ->
         true ->
             Time;
         false ->
-            os:timestamp()
+            riak_kv_pb_timeseries:timestamp()
     end.
 
 valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
@@ -822,7 +822,7 @@ do_poke(State) ->
 
 -spec maybe_expire(state()) -> state().
 maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
-    Diff = timer:now_diff(os:timestamp(), State#state.build_time),
+    Diff = timer:now_diff(riak_kv_pb_timeseries:timestamp(), State#state.build_time),
     Expire = app_helper:get_env(riak_kv,
                                 anti_entropy_expire,
                                 ?DEFAULT_EXPIRE),

@@ -189,7 +189,7 @@ handle_index_info({tree_built, Time}, Info) ->
     Info#index_info{build_time=Time};
 
 handle_index_info({exchange_complete, RemoteIdx, IndexN, Repaired}, Info) ->
-    ExInfo = #exchange_info{time=os:timestamp(),
+    ExInfo = #exchange_info{time=riak_kv_pb_timeseries:timestamp(),
                             repaired=Repaired},
     ExId = {RemoteIdx, IndexN},
     Exchanges = orddict:store(ExId, ExInfo, Info#index_info.exchanges),

@@ -209,7 +209,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       time_ref=TimeRef,
                                                       ttl=TTL,
                                                       used_memory=UsedMemory}) ->
-    Now = os:timestamp(),
+    Now = riak_kv_pb_timeseries:timestamp(),
     NoValChange = (TTL =:= undefined) orelse (Val =:= undefined),
     Val1 =
     case NoValChange of
@@ -635,7 +635,7 @@ do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
 
 %% Check if this timestamp is past the ttl setting.
 exceeds_ttl(Timestamp, TTL) ->
-    Diff = (timer:now_diff(os:timestamp(), Timestamp) / 1000 / 1000),
+    Diff = (timer:now_diff(riak_kv_pb_timeseries:timestamp(), Timestamp) / 1000 / 1000),
     Diff > TTL.
 
 update_indexes(_Bucket, _Key, undefined, _IndexRef) ->

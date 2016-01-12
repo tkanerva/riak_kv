@@ -252,7 +252,7 @@ format_failure_reason(FailureReason) ->
 %% @doc Get a timestamp, the number of milliseconds returned by
 %%      erlang:now().
 timestamp() ->
-    {MegaSeconds,Seconds,MilliSeconds}=os:timestamp(),
+    {MegaSeconds,Seconds,MilliSeconds}=riak_kv_pb_timeseries:timestamp(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
 parse_field_if_defined(_, undefined) ->

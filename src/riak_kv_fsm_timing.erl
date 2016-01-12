@@ -37,7 +37,7 @@
 
 -spec add_timing(atom(), timings()) -> timings().
 add_timing(State, Timings) when is_list(Timings) ->
-    [{State, os:timestamp()}|Timings].
+    [{State, riak_kv_pb_timeseries:timestamp()}|Timings].
 
 %% ---------------------------------------------------------------------
 

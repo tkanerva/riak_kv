@@ -1,0 +1,88 @@
+// -------------------------------------------------------------------
+//
+// NIF version of protocol buffer encode and decode for certain objects
+//
+// Copyright (c) 2011-2015 Basho Technologies, Inc. All Rights Reserved.
+//
+// This file is provided to you under the Apache License,
+// Version 2.0 (the "License"); you may not use this file
+// except in compliance with the License.  You may obtain
+// a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+//
+// -------------------------------------------------------------------
+
+#include <stdint.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+#include "erl_nif.h"
+#include "erl_driver.h"
+
+//
+// NIF functions
+//
+ERL_NIF_TERM GetTime(ErlNifEnv* Env, int Argc, const ERL_NIF_TERM Argv[]);
+
+static ErlNifFunc function_map[] =
+{
+    {"gettime",           0, GetTime}
+};
+
+static int
+OnLoad(
+    ErlNifEnv* Env,
+    void** PrivData,
+    ERL_NIF_TERM LoadInfo)
+{
+    return 0;
+}
+
+
+ERL_NIF_INIT(riak_kv_pb_timeseries, function_map, &OnLoad, NULL, NULL, NULL);
+
+
+ERL_NIF_TERM
+GetTime(
+    ErlNifEnv* Env,
+    int Argc,
+    const ERL_NIF_TERM Argv[])
+{
+    ErlNifSInt64 megaSec;
+    ErlNifSInt64 sec;
+    ErlNifSInt64 microSec;
+
+#if _POSIX_TIMERS >= 200801L
+
+    struct timespec ts;
+
+    // this is rumored to be faster that gettimeofday(), and sometimes                                                             
+    // shift less ... someday use CLOCK_MONOTONIC_RAW                                                                              
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    megaSec  = ts.tv_sec/1000000;
+    sec      = ts.tv_sec - megaSec*1000000;
+    microSec = ts.tv_nsec / 1000;
+
+#else
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    megaSec = tv.tv_sec/1000000;
+    sec     = tv.tv_sec - megaSec*1000000;
+    microSec= tv.tv_usec;
+
+#endif
+
+    return enif_make_tuple3(Env, enif_make_int64(Env, megaSec), enif_make_int64(Env, sec), enif_make_int64(Env, microSec));
+}

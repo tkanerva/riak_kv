@@ -134,7 +134,7 @@ months_since_1970_to_ms_test() ->
     assert_months(24).
 
 assert_minutes(Quanta, OkTimes) ->
-    Time = timestamp_to_ms(os:timestamp()),
+    Time = timestamp_to_ms(riak_kv_pb_timeseries:timestamp()),
     QuantaMs = quanta(Time, Quanta, m),
     {_, {_, M, _}} = calendar:now_to_universal_time(ms_to_timestamp(QuantaMs)),
     ?assert(lists:member(M, OkTimes)).
@@ -146,7 +146,7 @@ quanta_minutes_test() ->
     assert_minutes(6, [0, 6, 12, 18, 24, 30, 36, 42, 48, 54]).
 
 assert_hours(Quanta, OkTimes) ->
-    Time = timestamp_to_ms(os:timestamp()),
+    Time = timestamp_to_ms(riak_kv_pb_timeseries:timestamp()),
     QuantaMs = quanta(Time, Quanta, h),
     {_, {H, _, _}} = calendar:now_to_universal_time(ms_to_timestamp(QuantaMs)),
     ?assert(lists:member(H, OkTimes)).
@@ -156,7 +156,7 @@ quanta_hours_test() ->
     assert_hours(24, [0]).
 
 assert_days(Days) ->
-    Now = os:timestamp(),
+    Now = riak_kv_pb_timeseries:timestamp(),
     Time = timestamp_to_ms(Now),
     QuantaMs = quanta(Time, Days, d),
     {NowDate, _} = calendar:now_to_universal_time(Now),

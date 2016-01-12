@@ -315,7 +315,7 @@ aae_exchange_status(ExchangeInfo) ->
     io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
     io:format("~79..-s~n", [""]),
     _ = [begin
-         Now = os:timestamp(),
+         Now = riak_kv_pb_timeseries:timestamp(),
          LastStr = format_timestamp(Now, LastTS),
          AllStr = format_timestamp(Now, AllTS),
          io:format("~-49b  ~-12s  ~-12s~n", [Index, LastStr, AllStr]),
@@ -344,7 +344,7 @@ aae_tree_status(TreeInfo) ->
     io:format("~-49s  Built (ago)~n", ["Index"]),
     io:format("~79..-s~n", [""]),
     _ = [begin
-         Now = os:timestamp(),
+         Now = riak_kv_pb_timeseries:timestamp(),
          BuiltStr = format_timestamp(Now, BuiltTS),
          io:format("~-49b  ~s~n", [Index, BuiltStr]),
          ok

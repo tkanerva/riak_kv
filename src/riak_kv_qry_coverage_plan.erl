@@ -38,7 +38,7 @@ create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, Request) when n
     %% riak_kv_qry_worker sends us a tuple (qid) as a request id but
     %% that's a battle for another day
     create_plan({Query, Bucket}, NVal, PVC,
-                erlang:phash2({self(), os:timestamp()}), NodeCheckService, Request);
+                erlang:phash2({self(), riak_kv_pb_timeseries:timestamp()}), NodeCheckService, Request);
 %% PVC is generally 1 anyway, no support for it yet
 create_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request) ->
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),

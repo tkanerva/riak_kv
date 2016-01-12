@@ -40,9 +40,9 @@ code_change(_, S, _) ->
     {ok, S}.
 
 check_cache(#st{ts = undefined} = S) ->
-    S#st{ts = os:timestamp(), stats = do_get_stats()};
+    S#st{ts = riak_kv_pb_timeseries:timestamp(), stats = do_get_stats()};
 check_cache(#st{ts = Then} = S) ->
-    Now = os:timestamp(),
+    Now = riak_kv_pb_timeseries:timestamp(),
     case timer:now_diff(Now, Then) < 1000000 of
 	true ->
 	    S;

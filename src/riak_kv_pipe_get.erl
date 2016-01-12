@@ -129,7 +129,7 @@ try_preflist(Input, [NextV|Rest], #state{fd=FittingDetails}=State) ->
 
 try_partition(Input, Vnode, FittingDetails) ->
     ReqId = make_req_id(),
-    Start = os:timestamp(),
+    Start = riak_kv_pb_timeseries:timestamp(),
     riak_core_vnode_master:command(
       Vnode,
       ?KV_GET_REQ{bkey=bkey(Input), req_id=ReqId},
@@ -137,10 +137,10 @@ try_partition(Input, Vnode, FittingDetails) ->
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(os:timestamp(), Start)}}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(riak_kv_pb_timeseries:timestamp(), Start)}}]),
             {ok, Obj};
         {ReqId, {r, {error, _} = Error, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(os:timestamp(), Start)}}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(riak_kv_pb_timeseries:timestamp(), Start)}}]),
             Error
     end.
 
@@ -150,7 +150,7 @@ done(_State) ->
     ok.
 
 make_req_id() ->
-    erlang:phash2({self(), os:timestamp()}). % stolen from riak_client
+    erlang:phash2({self(), riak_kv_pb_timeseries:timestamp()}). % stolen from riak_client
 
 %% useful utilities
 

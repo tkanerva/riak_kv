@@ -35,6 +35,8 @@
          decode/2,
          encode/1,
          process/2,
+	 gettime/0,
+	 timestamp/0,
          process_stream/3]).
 
 %% NOTE: Clients will work with table names. Those names map to a
@@ -526,6 +528,18 @@ key_element_count_mismatch(Got, Need) ->
 
 to_string(X) ->
     flat_format("~p", [X]).
+
+%% ------------------------------------------------------------
+%% Timestamp bypass.  Export single timestamp function that gets
+%% used everywhere.  If NIF is loaded, NIF gettime is used, else
+%% default to riak_kv_pb_timeseries:timestamp()
+%% ------------------------------------------------------------
+
+timestamp() ->
+    gettime().
+
+gettime() ->
+    os:timestamp().
 
 
 %% ---------------------------------------------------

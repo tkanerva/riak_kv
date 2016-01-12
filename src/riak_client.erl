@@ -107,7 +107,7 @@ consistent_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
     BKey = {Bucket, Key},
     Ensemble = ensemble(BKey),
     Timeout = recv_timeout(Options),
-    StartTS = os:timestamp(),
+    StartTS = riak_kv_pb_timeseries:timestamp(),
     Result = case riak_ensemble_client:kget(Node, Ensemble, BKey, Timeout) of
                  {error, _}=Err ->
                      Err;
@@ -125,7 +125,7 @@ consistent_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
 maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
     case node() of
         Node ->
-            Duration = timer:now_diff(os:timestamp(), StartTS),
+            Duration = timer:now_diff(riak_kv_pb_timeseries:timestamp(), StartTS),
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             ObjSize = case Result of
                           {ok, Obj} ->
@@ -233,7 +233,7 @@ consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
     Ensemble = ensemble(BKey),
     NewObj = riak_object:apply_updates(RObj),
     Timeout = recv_timeout(Options),
-    StartTS = os:timestamp(),
+    StartTS = riak_kv_pb_timeseries:timestamp(),
     Result = case consistent_put_type(RObj, Options) of
                  update ->
                      riak_ensemble_client:kupdate(Node, Ensemble, BKey, RObj, NewObj, Timeout);
@@ -946,7 +946,7 @@ for_dialyzer_only_ignore(_X, _Y, {?MODULE, [_Node, _ClientId]}=THIS) ->
 
 %% @private
 mk_reqid() ->
-    erlang:phash2({self(), os:timestamp()}). % only has to be unique per-pid
+    erlang:phash2({self(), riak_kv_pb_timeseries:timestamp()}). % only has to be unique per-pid
 
 %% @private
 wait_for_reqid(ReqId, Timeout) ->

@@ -1107,7 +1107,7 @@ decode_maybe_binary(<<Bin/binary>>) ->
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
 update_last_modified(RObj) ->
-    update_last_modified(RObj, os:timestamp()).
+    update_last_modified(RObj, riak_kv_pb_timeseries:timestamp()).
 
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary with an external timestamp passed in.

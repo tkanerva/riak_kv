@@ -86,11 +86,25 @@ init(Partition, FittingDetails) ->
          -> {ok | {error, term()}, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     %% assume local chashfun was used for initial attempt
-    case try_partition(Input, {Partition, node()}, FittingDetails) of
-        {error, _} when Last == false ->
-            {try_preflist(Input, State), State};
-        Result ->
-            {send_output(Input, Result, State), State}
+    {Bucket, Key} = bkey(Input),
+    case riak_core_bucket:get_bucket(Bucket) of
+	{error, _Reason} = ER ->
+	    ER;
+	BProps ->
+	    Input2 =
+		case proplists:is_defined(ddl, BProps) of
+		    false ->
+			Input;
+		    true ->
+			%% This is the local key - re-encode in weird module local bkey list
+			[Bucket, tskey(Key)]
+		end,
+	    case try_partition(Input2, {Partition, node()}, FittingDetails) of
+		{error, _} when Last == false ->
+		    {try_preflist(Input2, State), State};
+		Result ->
+		    {send_output(Input2, Result, State), State}
+	    end
     end.
 
 send_output(Input, {ok, Obj}, State) ->
@@ -185,7 +199,29 @@ keydata([_,_,KeyData,_])   -> null2undefined(KeyData).
 %% @doc Compute the KV hash of the input.
 -spec bkey_chash(riak_kv_mrc_pipe:key_input()) -> chash:index().
 bkey_chash(Input) ->
-    riak_core_util:chash_key(bkey(Input)).
+    {Bucket, Key} = BKey = bkey(Input),
+    case riak_core_bucket:get_bucket(Bucket) of
+	{error, Reason} ->
+	    error(Reason);
+	BProps ->
+	    case proplists:is_defined(ddl, BProps) of
+		false ->
+		    riak_core_util:chash_key(BKey, BProps);
+		_ ->
+		    % is it safe to use the bprops DDL vs the compiled one?
+		    {Table, Table} = Bucket,
+		    Mod = riak_ql_ddl:make_module_name(Table),
+		    TSKey = tskey(Key),
+		    PartKey = riak_kv_ts_util:encode_typeval_key(
+			      riak_ql_ddl:get_partition_key(Mod:get_ddl(), TSKey, Mod)),
+		    riak_core_util:chash_key({Bucket, PartKey}, BProps)
+	    end
+    end.
+
+tskey(Key) when is_binary(Key) ->
+    sext:decode(Key);
+tskey(Key) when is_tuple(Key) ->
+    Key.
 
 %% @doc Find the N value for the bucket of the input.
 -spec bkey_nval(riak_kv_mrc_pipe:key_input()) -> integer().

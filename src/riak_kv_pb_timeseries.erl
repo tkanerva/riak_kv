@@ -144,6 +144,15 @@ decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+%-define(PROF_DEBUG1, 1).
+
+-ifdef(PROF_DEBUG1).
+processDebug(_Table, _Atom, _Fun, _M, State) ->
+    {reply, #tsputresp{}, State}.
+-else.
+processDebug(Table, _Atom, Fun, M, State) ->
+    check_table_and_call(Table, Fun, M, State).
+-endif.
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_responses(), #state{}}.
@@ -151,10 +160,10 @@ process(#rpberrorresp{} = Error, State) ->
     {reply, Error, State};
 
 process(M = #tsputreq{table = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsputreq/4, M, State);
+    processDebug(Table, tsputreq, fun sub_tsputreq/4, M, State);
 
 process(M = #tsttbputreq{table = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsttbputreq/4, M, State);
+    processDebug(Table, tsttbputreq, fun sub_tsttbputreq/4, M, State);
 
 process(M = #tsgetreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tsgetreq/4, M, State);

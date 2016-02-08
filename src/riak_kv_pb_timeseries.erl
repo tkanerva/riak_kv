@@ -150,20 +150,33 @@ process_tsreq(Table, Data, State) ->
       {reply, missing_helper_module(Table, BucketProps), State}
   end.
 
--spec process(atom() | #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-              | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
-                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-process(#tsputreq{rows = []}, State) ->
+%-define(PROF_DEBUG1, 1).
+
+-ifdef(PROF_DEBUG1).
+processDebug(M, State) ->
+    {reply, #tsputresp{}, State}.
+-else.
+processDebug(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table=Table, rows = Rows}, State) ->
+processDebug(#tsputreq{table=Table, rows = Rows}, State) ->
     Data = riak_pb_ts_codec:decode_rows(Rows),
     process_tsreq(Table, Data, State);
 
-process(#tsttbputreq{rows = []}, State) ->
+processDebug(#tsttbputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsttbputreq{table = Table, rows = Rows}, State) ->
+processDebug(#tsttbputreq{table = Table, rows = Rows}, State) ->
     Data = Rows,
-    process_tsreq(Table, Data, State);
+    process_tsreq(Table, Data, State).
+-endif.
+
+-spec process(atom() | #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+              | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
+                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+
+process(M = #tsputreq{}, State) ->
+    processDebug(M, State);
+process(M = #tsttbputreq{}, State) ->
+    processDebug(M, State);
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},

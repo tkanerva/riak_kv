@@ -31,6 +31,8 @@
 
 -behaviour(riak_api_pb_service).
 
+-compile(export_all).
+
 -export([init/0,
          decode/2,
          encode/1,
@@ -153,7 +155,7 @@ process_tsreq(Table, Data, State) ->
 %-define(PROF_DEBUG1, 1).
 
 -ifdef(PROF_DEBUG1).
-processDebug(M, State) ->
+processDebug(_M, State) ->
     {reply, #tsputresp{}, State}.
 -else.
 processDebug(#tsputreq{rows = []}, State) ->

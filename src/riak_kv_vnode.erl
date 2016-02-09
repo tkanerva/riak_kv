@@ -23,6 +23,9 @@
 -behaviour(riak_core_vnode).
 
 %% API
+
+-compile(export_all).
+
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          start_vnodes/1,
@@ -845,16 +848,8 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
                 From, State=#state{mod=Mod, idx=Idx, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
-    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
-        {ok, UpModState} ->
+    handlePutReq(Mod, State, Context, Bucket, Key, EncodedVal, ModState, Idx, Type);
 
-	    update_hashtree(Bucket, Key, EncodedVal, State),
-	    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
-
-	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
-        {error, Reason, UpModState} ->
-            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
-    end;
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
     StartTS = os:timestamp(),
@@ -867,6 +862,25 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end.
+
+%-define(PROF_DEBUG3, 1).
+
+-ifdef(PROF_DEBUG3).
+handlePutReq(_Mod, State, _Context, _Bucket, _Key, _EncodedVal, UpModState, _Idx, Type) ->
+    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}}.
+-else.
+handlePutReq(Mod, State, Context, Bucket, Key, EncodedVal, ModState, Idx, Type) ->
+    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
+        {ok, UpModState} ->
+
+	    update_hashtree(Bucket, Key, EncodedVal, State),
+	    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+
+	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end.
+-endif.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter

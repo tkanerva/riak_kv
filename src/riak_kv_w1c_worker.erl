@@ -30,6 +30,8 @@
     terminate/2,
     code_change/3]).
 
+-compile(export_all).
+
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 
@@ -112,6 +114,14 @@ put(RObj0, Options) ->
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
+%-define(PROF_DEBUG2, 1).
+
+-ifdef(PROF_DEBUG2).
+async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
+    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
+async_put(_RObj, _W, _PW, _Bucket, _NVal, _LK, _EncodeFn, _Preflist) ->
+    {ok, {1, 1}}.
+-else.
 async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
     async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
 async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
@@ -130,6 +140,7 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
             start_ts=StartTS,
             size=size(EncodedVal)}}),
     {ok, {ReqId, Worker}}.
+-endif.
 
 -spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).

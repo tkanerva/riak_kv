@@ -127,30 +127,40 @@ encode(Message) ->
 -spec process_tsreq(binary(), term(), #state{}) ->
 {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process_tsreq(Table, Data, State) ->
-  Mod = riak_ql_ddl:make_module_name(Table),
+    process_tsreqDebug(Table, Data, State).
 
-  case (catch validate_rows(Mod, Data)) of
-    [] ->
-      try
-        case put_data(Data, Table, Mod) of
-          0 ->
-            {reply, #tsputresp{}, State};
-          ErrorCount ->
-            EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
-            {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
-        end
-      catch
-        Class:Exception ->
-          lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
-          Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
-          {reply, Error, State}
-      end;
-    BadRowIdxs when is_list(BadRowIdxs) ->
-      {reply, validate_rows_error_response(BadRowIdxs), State};
-    {_, {undef, _}} ->
-      BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
-      {reply, missing_helper_module(Table, BucketProps), State}
-  end.
+%-define(PROF_DEBUG2, 1).
+
+-ifdef(PROF_DEBUG2).
+process_tsreqDebug(Table, _Data, State) ->
+    _Mod = riak_ql_ddl:make_module_name(Table),
+    {reply, #tsputresp{}, State}.
+-else.
+process_tsreqDebug(Table, Data, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case (catch validate_rows(Mod, Data)) of
+	[] ->
+	    try
+		case put_data(Data, Table, Mod) of
+		    0 ->
+			{reply, #tsputresp{}, State};
+		    ErrorCount ->
+			EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
+			{reply, make_rpberrresp(?E_PUT, EPutMessage), State}
+		end
+	    catch
+		Class:Exception ->
+		    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+		    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+		    {reply, Error, State}
+	    end;
+	BadRowIdxs when is_list(BadRowIdxs) ->
+	    {reply, validate_rows_error_response(BadRowIdxs), State};
+	{_, {undef, _}} ->
+	    BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+	    {reply, missing_helper_module(Table, BucketProps), State}
+    end.
+-endif.
 
 %-define(PROF_DEBUG1, 1).
 

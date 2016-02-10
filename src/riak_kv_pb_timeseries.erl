@@ -273,6 +273,15 @@ sub_tsttbputreq(Mod, _DDL, #tsttbputreq{table = Table, rows = Data},
     sub_putreq_common(Mod, Table, Data, State).
 
 sub_putreq_common(Mod, Table, Data, State) ->
+    sub_putreq_commonDebug(Mod, Table, Data, State).
+
+%-define(PROF_DEBUG2, 1).
+
+-ifdef(PROF_DEBUG2).
+sub_putreq_commonDebug(_Mod, _Table, _Data, State) ->
+    {reply, #tsputresp{}, State}.
+-else.
+sub_putreq_commonDebug(Mod, Table, Data, State) ->
     case catch validate_rows(Mod, Data) of
         [] ->
             case put_data(Data, Table, Mod) of
@@ -284,6 +293,7 @@ sub_putreq_common(Mod, Table, Data, State) ->
         BadRowIdxs when is_list(BadRowIdxs) ->
             {reply, validate_rows_error_response(BadRowIdxs), State}
     end.
+-endif.
 
 %% Give validate_rows/2 a DDL Module and a list of decoded rows,
 %% and it will return a list of strings that represent the invalid rows indexes.

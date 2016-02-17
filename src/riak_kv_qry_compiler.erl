@@ -39,11 +39,9 @@
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
-    {error, 'full table scan not implemented'};
 compile(#ddl_v1{} = DDL,
-        ?SQL_SELECT{is_executable = false, type = sql} = Q, MaxSubQueries) ->
-    case compile_select_clause(DDL, Q) of
+        ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Clause }} = Q, MaxSubQueries) ->
+    case compile_select_clause(DDL, Clause, get_col_names(DDL, Q)) of
         {ok, S} ->
             compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
         {error, _} = Error ->
@@ -76,7 +74,6 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
             {error, E};
         Where2 ->
             Q2 = Q1?SQL_SELECT{is_executable = true,
-                               type          = timeseries,
                                local_key     = LK,
                                partition_key = PK},
             SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Where2],
@@ -137,7 +134,9 @@ my_mapfoldl(F, Accu0, [Hd|Tail]) ->
 my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
-compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
+compile_select_clause(_DDL, [], _ColNames) ->
+    {error, 'full table scan not implemented'};
+compile_select_clause(DDL, SelectClause, ColNames) ->
     CompileColFn =
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
@@ -147,28 +146,28 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
     %% iterate from the right so we can append to the head of lists
-    {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
+    {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, SelectClause),
 
     {ColTypes, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
-        end, [], Sel),
+        end, [], SelectClause),
 
     case sets:is_element(aggregate, ResultTypeSet) of
         true  ->
             Q3 = Q2#riak_sel_clause_v1{
                    calc_type = aggregate,
-                   col_names = get_col_names(DDL, Q) };
+                   col_names = ColNames };
         false ->
             Q3 = Q2#riak_sel_clause_v1{
                    calc_type = rows,
                    initial_state = [],
-                   col_names = get_col_names(DDL, Q) }
+                   col_names = ColNames }
     end,
     case Errors of
       [] ->
           {ok, Q3#riak_sel_clause_v1{
-              col_names = get_col_names(DDL, Q),
+              col_names = ColNames,
               col_return_types = lists:flatten(ColTypes) }};
       [_|_] ->
           {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
@@ -1000,7 +999,6 @@ simplest_test() ->
     LK = get_standard_lk(),
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where2,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1028,7 +1026,6 @@ simple_with_filter_1_test() ->
     LK = get_standard_lk(),
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1055,7 +1052,6 @@ simple_with_filter_2_test() ->
     LK = get_standard_lk(),
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1084,7 +1080,6 @@ simple_with_filter_3_test() ->
             ],
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1118,7 +1113,6 @@ simple_with_2_field_filter_test() ->
             ],
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1151,7 +1145,6 @@ complex_with_4_field_filter_test() ->
     LK = get_standard_lk(),
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
                           'WHERE'       = Where2,
                           partition_key = PK,
                           local_key     = LK }]},
@@ -1183,7 +1176,6 @@ complex_with_boolean_rewrite_filter_test() ->
             ],
     ?assertMatch(
        {ok, [?SQL_SELECT{ is_executable  = true,
-                          type          = timeseries,
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK

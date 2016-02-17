@@ -52,7 +52,6 @@
           partition_key = none  :: none | #key_v1{},
           %% indicates whether this query has already been compiled to a sub query
           is_executable = false :: boolean(),
-          type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
           local_key                                  % prolly a mistake to put this here - should be in DDL
         }).

@@ -62,8 +62,7 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
-          updatevalue :: term(),
-          is_crdt = false :: boolean()
+          updatevalue :: term()
          }).
 -opaque riak_object() :: #r_object{}.
 

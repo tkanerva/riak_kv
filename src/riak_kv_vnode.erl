@@ -1500,11 +1500,11 @@ prepare_put(State=#state{mod=Mod,
         end,
     case GetReply of
         ok ->
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:index_specs(RObj);
-                false ->
-                    IndexSpecs = []
+            IndexSpecs = case IndexBackend of
+                             true ->
+                                 riak_object:index_specs(RObj);
+                             false ->
+                                 []
             end,
 
             %% local not found, start a per key epoch
@@ -1632,8 +1632,8 @@ perform_put({true, Obj},
                      bkey=BKey,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
-    {Reply, State2};
+    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State);
+
 %% @TODO(rdb) Janky hack for PoC delta-mutation. Only a coord put that
 %% is a crdt_op will generate a three tuple of `{true, StoreObject,
 %% ReplicateDeltaObject}'
@@ -1661,21 +1661,21 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
-    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       do_max_check) of
-        {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
-            maybe_cache_object(BKey, Obj, State),
-            ?INDEX(Obj, put, Idx),
-            case RB of
-                true ->
-                    Reply = {dw, Idx, Obj, ReqID};
-                false ->
-                    Reply = {dw, Idx, ReqID}
-            end;
-        {{error, Reason, UpdModState}, _EncodedVal} ->
-            Reply = {fail, Idx, Reason}
-    end,
+    Reply = case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
+                                do_max_check) of
+                {{ok, UpdModState}, EncodedVal} ->
+                    update_hashtree(Bucket, Key, EncodedVal, State),
+                    maybe_cache_object(BKey, Obj, State),
+                    ?INDEX(Obj, put, Idx),
+                    case RB of
+                        true ->
+                            {dw, Idx, Obj, ReqID};
+                        false ->
+                            {dw, Idx, ReqID}
+                    end;
+                {{error, Reason, UpdModState}, _EncodedVal} ->
+                    {fail, Idx, Reason}
+            end,
     {Reply, State#state{modstate=UpdModState}}.
 
 actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
@@ -1732,21 +1732,6 @@ select_newest_content(Mult) ->
          end,
          Mult)).
 
-%% @private @HACK @TODO(rdb) pass this in, or some more efficient
-%% check
-is_crdt(Obj) ->
-    Bucket = riak_object:bucket(Obj),
-    case riak_core_bucket:get_bucket(Bucket) of
-        BProps when is_list(BProps) ->
-            DataType = proplists:get_value(datatype, BProps),
-            AllowMult = proplists:get_value(allow_mult, BProps),
-            Mod = riak_kv_crdt:to_mod(DataType),
-            Supported = riak_kv_crdt:supported(Mod),
-            AllowMult andalso Supported;
-        {error, no_type} ->
-            false
-    end.
-
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
@@ -1761,7 +1746,7 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% @TODO(rdb) @HACK
     %% use bucket props to decide if this is a CRDT, if it is, force a
     %% merge as we might have a delta
-    ResObj = case is_crdt(UpdObj) of
+    ResObj = case riak_kv_crdt:is_crdt(UpdObj) of
                  true ->
                      %% This is bad, we'll be merging more than we need to,
                      %% even things we've seen already!

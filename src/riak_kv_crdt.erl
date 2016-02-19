@@ -67,19 +67,22 @@
 %% @see merge/1
 -spec update(riak_object:riak_object(), riak_dt:actor(), riak_dt:operation()) ->
                     {Store::riak_object:riak_object(),
-                     Delta::riak_object:riak_object()} |
-                    precondition_error().
+                     Delta::riak_object:riak_object()} | precondition_error().
 update(RObj, Actor, Operation) ->
     {CRDTs0, Siblings} = merge_object(RObj),
-    case update_crdt(CRDTs0, Actor, Operation) of
+    case update_crdt(CRDTs0, Actor, ?CRDT_OP{mod=Mod}=Operation) of
         {error, _}=E ->
             E;
         CRDTs ->
             StoreObj = update_object(RObj, CRDTs, Siblings),
-            DeltaObj = delta_object(StoreObj,
-                                    CRDTs,
-                                   Actor),
-            {ok, {StoreObj, DeltaObj}}
+            case Mod of
+                ?SET_TYPE ->
+                    DeltaObj = delta_object(StoreObj,
+                                            CRDTs,
+                                            Actor),
+                    {ok, {StoreObj, DeltaObj}};
+                _ -> StoreObj
+            end
     end.
 
 -spec delta_object(riak_object:riak_object(),
@@ -294,7 +297,14 @@ update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     CounterOp = counter_op(Amt),
     Op = ?CRDT_OP{mod=?V1_COUNTER_TYPE, op=CounterOp},
     update_crdt(Dict, Actor, Op);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) ->
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
+    {Meta, Record, Value} = fetch_with_default(Mod, Dict),
+    case Mod:update(Op, Actor, Value) of
+        {ok, NewVal} ->
+            orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
+        {error, _}=E -> E
+    end;
+update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
     Updt = update_crdt(Mod, Ops, Actor, Value, OpCtx),
     case Updt of
@@ -308,17 +318,40 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) ->
             orddict:store(Mod, {Meta, Record?CRDT{value=Updated, delta=DPlusB}}, Dict);
         {error, _}=E ->
             E
+    end;
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx})
+  when Mod==?MAP_TYPE;Mod==riak_dt_orsowt ->
+    case orddict:find(Mod, Dict) of
+        error ->
+            %% No local replica of this CRDT, apply the ops to a new
+            %% instance
+            case update_crdt(Mod, Ops, Actor, Mod:new(), OpCtx) of
+                {ok, InitialVal} ->
+                    orddict:store(Mod, {undefined, to_record(Mod, InitialVal)}, Dict);
+                E ->
+                    E
+            end;
+        {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
+            case update_crdt(Mod, Ops, Actor, LocalReplica, OpCtx) of
+                {error, _}=E -> E;
+                {ok, NewVal} ->
+                    orddict:store(Mod, {Meta, LocalCRDT?CRDT{value=NewVal}}, Dict)
+            end
     end.
 
 %% @private call update/3 or update/4 depending on context value
 -spec update_crdt(module(), term(), riak_dt:actor(), term(),
-                  undefined | riak_dt_vclock:vclock()) ->
-                         term().
-update_crdt(Mod, Ops, Actor, CRDT, undefined) ->
+                  undefined | riak_dt_vclock:vclock()) -> term().
+update_crdt(?SET_TYPE=Mod, Ops, Actor, CRDT, undefined) ->
     Mod:delta_update(Ops, Actor, CRDT);
+update_crdt(Mod, Ops, Actor, CRDT, undefined) ->
+    Mod:update(Ops, Actor, CRDT);
+update_crdt(?SET_TYPE=Mod, Ops, Actor, CRDT, Ctx0) ->
+    Ctx = get_context(Ctx0),
+    Mod:delta_update(Ops, Actor, CRDT, Ctx);
 update_crdt(Mod, Ops, Actor, CRDT, Ctx0) ->
     Ctx = get_context(Ctx0),
-    Mod:delta_update(Ops, Actor, CRDT, Ctx).
+    Mod:update(Ops, Actor, CRDT, Ctx).
 
 -spec get_context(undefined | binary()) -> riak_dt_vclock:vclock().
 get_context(undefined) ->
@@ -391,9 +424,6 @@ new(B, K, Mod) ->
     Doc0 = riak_object:new(B, K, Bin, CType),
     riak_object:set_vclock(Doc0, vclock:fresh()).
 
-%% @doc turn a `crdt()' record into a binary for storage on disk /
-%% passing on the network
--spec to_binary(crdt()) -> binary().
 to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
     to_binary(CRDT, ?V1_VERS);
 to_binary(?CRDT{mod=Mod, value=Value}) ->
@@ -520,8 +550,6 @@ mod_map(map) ->
 mod_map(_) ->
     ?MOD_MAP.
 
-
-
 %% @doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
 %% a smaller than Type:to_binary(Value) binary context.
@@ -543,7 +571,8 @@ is_crdt_test_() ->
              meck:new(riak_core_capability, []),
              meck:expect(riak_core_capability, get,
                          fun({riak_kv, crdt}, []) ->
-                                 [pncounter,riak_dt_pncounter,riak_dt_orswot,
+                                 [pncounter,riak_dt_pncounter,
+                                  riak_dt_delta_orswot,
                                   riak_dt_map];
                             (X, Y) -> meck:passthrough([X, Y]) end),
              ok
@@ -604,7 +633,8 @@ eqc_test_() ->
 prop_binary_roundtrip() ->
     ?FORALL({_Type, Mod}, oneof(?MOD_MAP),
             begin
-                {ok, ?CRDT{mod=SMod, value=SValue}} = from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
+                {ok, ?CRDT{mod=SMod, value=SValue}} =
+                    from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
                 conjunction([{module, equals(Mod, SMod)},
                              {value, Mod:equal(SValue, Mod:new())}])
             end).

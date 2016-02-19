@@ -38,7 +38,6 @@
 -module(riak_kv_gcounter).
 
 -export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
--export([fragment/2]).
 
 %% EQC API
 -ifdef(EQC).
@@ -76,15 +75,6 @@ new(Id, Count) when is_integer(Count), Count > 0 ->
 -spec value(gcounter()) -> non_neg_integer().
 value(GCnt) ->
     lists:sum([ Cnt || {_Act, Cnt} <- GCnt]).
-
--spec fragment(term(), gcounter()) -> non_neg_integer().
-fragment(Actor, Cntr) ->
-    case lists:keyfind(Actor, 1, Cntr) of
-        false ->
-            [];
-        Fragment ->
-            Fragment
-    end.
 
 %% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
 %% returns an updated `gcounter()' or error if `Amt' is not a `pos_integer()'

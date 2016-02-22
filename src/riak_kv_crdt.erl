@@ -297,13 +297,6 @@ update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     CounterOp = counter_op(Amt),
     Op = ?CRDT_OP{mod=?V1_COUNTER_TYPE, op=CounterOp},
     update_crdt(Dict, Actor, Op);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
-    {Meta, Record, Value} = fetch_with_default(Mod, Dict),
-    case Mod:update(Op, Actor, Value) of
-        {ok, NewVal} ->
-            orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
-        {error, _}=E -> E
-    end;
 update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
     Updt = update_crdt(Mod, Ops, Actor, Value, OpCtx),
@@ -318,6 +311,13 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
             orddict:store(Mod, {Meta, Record?CRDT{value=Updated, delta=DPlusB}}, Dict);
         {error, _}=E ->
             E
+    end;
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
+    {Meta, Record, Value} = fetch_with_default(Mod, Dict),
+    case Mod:update(Op, Actor, Value) of
+        {ok, NewVal} ->
+            orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
+        {error, _}=E -> E
     end;
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx})
   when Mod==?MAP_TYPE;Mod==riak_dt_orsowt ->
@@ -426,6 +426,11 @@ new(B, K, Mod) ->
 
 to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
     to_binary(CRDT, ?V1_VERS);
+to_binary(?CRDT{mod=?SET_TYPE=Mod, value=Value}) ->
+    {ok, CRDTBin} = Mod:to_binary(?V2_VERS, Value),
+    Type = atom_to_binary(Mod, latin1),
+    TypeLen = byte_size(Type),
+    <<?TAG:8/integer, ?V2_VERS:8/integer, TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>;
 to_binary(?CRDT{mod=Mod, value=Value}) ->
     %% Store the CRDT in the version that is negotiated cluster wide
     Version = crdt_version(Mod),
@@ -513,7 +518,8 @@ crdt_version(Mod) ->
             %% use any term except the integer `1' to unset app env
             %% and use capability negotiated CRDT version epoch.
             %% Default to 1 for any unknown CRDT version.
-            NegotiatedCap = riak_core_capability:get({riak_kv, crdt_epoch_versions}, ?E1_DATATYPE_VERSIONS),
+            NegotiatedCap = riak_core_capability:get({riak_kv, crdt_epoch_versions},
+                                                     ?E1_DATATYPE_VERSIONS),
             proplists:get_value(Mod, NegotiatedCap, 1)
     end.
 
@@ -638,7 +644,6 @@ prop_binary_roundtrip() ->
                 conjunction([{module, equals(Mod, SMod)},
                              {value, Mod:equal(SValue, Mod:new())}])
             end).
-
 
 -endif.
 -endif.

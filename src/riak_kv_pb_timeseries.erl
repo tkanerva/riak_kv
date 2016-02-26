@@ -37,6 +37,12 @@
          process/2,
          process_stream/3]).
 
+%-define(PROF_QUERY, 1).
+
+-ifdef(PROF_QUERY).
+-compile(export_all).
+-endif.
+
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
 -define(E_FETCH,             1002).
@@ -77,6 +83,17 @@
 -type ts_query_types() :: #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}.
 
 -type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
+
+-ifdef(PROF_QUERY).
+fakeQueryResp(one) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     [[<<"family1">>,<<"seriesX">>,1,1,<<"test1">>,1.0,true]]};
+fakeQueryResp(none) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     []}.
+-endif.
 
 -spec init() -> any().
 init() ->
@@ -145,6 +162,13 @@ decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+-ifdef(PROF_QUERY).
+processDebug(_Table, _Fun, _M, State) ->
+    {reply, make_tsqueryresp(fakeQueryResp(one)), State}.
+-else.
+processDebug(Table, Fun, M, State) ->
+    check_table_and_call(Table, Fun, M, State).
+-endif.
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_responses(), #state{}}.
@@ -177,7 +201,7 @@ process(DDL = #ddl_v1{}, State) ->
     create_table(DDL, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
+    processDebug(Table, fun sub_tsqueryreq/4, M, State);
 
 process(M = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).

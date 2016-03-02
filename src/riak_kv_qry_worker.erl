@@ -60,6 +60,23 @@
           run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
          }).
 
+%-define(PROF_QUERY, 1).
+
+-ifdef(PROF_QUERY).
+-compile(export_all).
+-endif.
+
+-ifdef(PROF_QUERY).
+fakeQueryResp(one) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     [[<<"family1">>,<<"seriesX">>,1,1,<<"test1">>,1.0,true]]};
+fakeQueryResp(none) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     []}.
+-endif.
+
 %%%===================================================================
 %%% OTP API
 %%%===================================================================
@@ -175,6 +192,17 @@ extract_riak_object(V) when is_binary(V) ->
 pop_next_query() ->
     self() ! pop_next_query.
 
+-ifdef(PROF_QUERY).
+runSubQueryFn(_RunSubQs, _SubQs, ReceiverPid, State) ->
+    ReceiverPid ! {ok, fakeQueryResp(one)},
+    pop_next_query(),
+    {ok, new_state(State#state.name)}.
+
+-else.
+runSubQueryFn(RunSubQs, SubQs, _ReceiverPid, State) ->
+    {RunSubQs(SubQs), State}.
+-endif.
+
 %%
 execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
               #state{ run_sub_qs_fn = RunSubQs } = State) ->
@@ -184,12 +212,13 @@ execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
     ?SQL_SELECT{'SELECT' = Sel} = Qry,
     #riak_sel_clause_v1{initial_state = InitialState} = Sel,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    ok = RunSubQs(SubQs),
-    {ok, State#state{qid          = QId,
+    NextState = State#state{qid          = QId,
                      receiver_pid = ReceiverPid,
                      qry          = Qry,
                      sub_qrys     = Indices,
-                     result       = InitialState }}.
+                     result       = InitialState },
+
+    runSubQueryFn(RunSubQs, SubQs, ReceiverPid, NextState).
 
 %%
 add_subquery_result(SubQId, Chunk,

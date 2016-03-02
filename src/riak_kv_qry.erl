@@ -32,6 +32,23 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+%-define(PROF_QUERY, 1).
+
+-ifdef(PROF_QUERY).
+-compile(export_all).
+-endif.
+
+-ifdef(PROF_QUERY).
+fakeQueryResp(one) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     [[<<"family1">>,<<"seriesX">>,1,1,<<"test1">>,1.0,true]]};
+fakeQueryResp(none) ->
+    {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
+     [varchar,varchar,timestamp,sint64,varchar,double,boolean],
+     []}.
+-endif.
+
 %% No coverage plan for parallel requests
 -spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
     {ok, any()} | {error, any()}.
@@ -88,6 +105,14 @@ count_to_position(Col, [#hash_fn_v1{args = [#param_v1{name = [Col]} | _]} | _], 
 count_to_position(Col, [_ | Rest], Pos) ->
     count_to_position(Col, Rest, Pos + 1).
 
+-ifdef(PROF_QUERY).
+processQueries(_Queries, _DDL) ->
+    {ok, fakeQueryResp(one)}.
+-else.
+processQueries(Queries, DDL) ->
+    maybe_await_query_results(
+      riak_kv_qry_queue:put_on_queue(self(), Queries, DDL)).
+-endif.
 
 maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
@@ -100,8 +125,7 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
                 {error,_} = Error ->
                     Error;
                 {ok, Queries} ->
-                    maybe_await_query_results(
-                        riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
+		    processQueries(Queries, DDL)
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}

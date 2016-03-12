@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_newtype 
+%% riak_kv_ts_newtype
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -43,7 +43,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%%% 
+%%%
 %%% API.
 %%%
 
@@ -55,7 +55,7 @@ start_link() ->
 new_type(BucketType) ->
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
-%%% 
+%%%
 %%% gen_server.
 %%%
 
@@ -78,7 +78,8 @@ handle_cast(_Msg, State) ->
 
 handle_info({'EXIT', Pid, normal}, State) ->
     % success
-    _ = riak_kv_compile_tab:update_state(Pid, compiled),
+    _ = riak_kv_compile_tab:update_state(Pid, compiled, riak_ql_ddl:get_version()),
+    _ = riak_kv_compile_tab:clean_old_entries(Pid, riak_ql_ddl:get_version()),
     {noreply, State};
 handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
     % this means that the process was interrupted while compiling by an update
@@ -86,12 +87,13 @@ handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
     {noreply, State};
 handle_info({'EXIT', Pid, _Error}, State) ->
     % compilation error, check
-    _ = riak_kv_compile_tab:update_state(Pid, failed),
+    _ = riak_kv_compile_tab:update_state(Pid, failed, riak_ql_ddl:get_version()),
     {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
     ok = riak_core_metadata_manager:swap_notification_handler(
         ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
     ok = add_ddl_ebin_to_path(),
+    ok = scan_for_outdated_modules(riak_ql_ddl:get_version()),
     {noreply, State};
 handle_info(_, State) ->
     {noreply, State}.
@@ -105,6 +107,27 @@ code_change(_OldVsn, State, _Extra) ->
 %%%
 %%% Internal.
 %%%
+
+
+%% Make certain all modules are compiled for at least the current
+%% version of QL. XXX XXX XXX XXX DANGER WILL ROBINSON
+%%
+%% How do we block riak_kv from being registered before this is done?
+scan_for_outdated_modules(CurVer) ->
+    CompiledTypes = riak_kv_compile_tab:modules_with_versions(),
+    OldModules =
+        lists:filter(fun({_Type, _DDL, Ver}) when Ver < CurVer ->
+                             true;
+                        (_) ->
+                             false
+                     end,
+                     CompiledTypes),
+    lists:foreach(fun({Type, DDL, _Ver}) ->
+                          ok = start_compilation(Type, DDL)
+                  end,
+                  OldModules).
+
+
 
 %%
 %% We rely on the claimant to not give us new DDLs after the bucket
@@ -157,7 +180,8 @@ start_compilation(BucketType, DDL) ->
         fun() ->
             ok = compile_and_store(ddl_ebin_directory(), DDL)
         end),
-    ok = riak_kv_compile_tab:insert(BucketType, DDL, Pid, compiling).
+    ok = riak_kv_compile_tab:insert(BucketType, DDL, Pid, compiling,
+                                    riak_ql_ddl:get_version()).
 
 %%
 compile_and_store(BeamDir, DDL) ->

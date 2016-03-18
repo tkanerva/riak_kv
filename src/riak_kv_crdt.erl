@@ -27,9 +27,9 @@
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
--export([value/1, counter_value/1, set_value/1, map_value/1]).
+-export([value/1, counter_value/1, set_value/1, map_value/1, hll_value/1]).
 %% Other helper funs
--export([is_crdt/1]).
+-export([is_crdt/1, operation/3]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -93,7 +93,8 @@ merge(RObj) ->
 %% context, and user value. Performs a merge, then gets the CRDT end
 %% user value.
 %% @see merge/1
--spec value(riak_object:riak_object(), module()) -> {{binary(), riak_dt:value()}, [{atom(), atom(), number()}]}.
+-spec value(riak_object:riak_object(), module()) ->
+                   {{binary(), riak_dt:value()}, [{atom(), atom(), number()}]}.
 value(RObj, Type) ->
     {CRDTs, _NonCRDTSiblings} = merge_object(RObj),
     DType = orddict:find(Type, CRDTs),
@@ -119,26 +120,35 @@ value(RObj) ->
             end
     end.
 
+-spec simple_value(riak_object:riak_object(), atom()) -> term().
+simple_value(RObj, Type) ->
+    {{_Ctx, DTVal}, _Stats} = value(RObj, Type),
+    DTVal.
+
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ counter type value, or zero if no counter is present.
 -spec counter_value(riak_object:riak_object()) -> integer().
 counter_value(RObj) ->
-    {{_Ctx, Count}, _Stats}  = value(RObj, ?COUNTER_TYPE),
-    Count.
+    simple_value(RObj, ?COUNTER_TYPE).
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Set type value, or `[]' if no Set is present.
 -spec set_value(riak_object:riak_object()) -> list().
 set_value(RObj) ->
-    {{_Ctx, Set}, _Stats}  = value(RObj, ?SET_TYPE),
-    Set.
+    simple_value(RObj, ?SET_TYPE).
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ Hyperloglog-set type card-value, or zero if no Hyperloglog set is
+%% present.
+-spec hll_value(riak_object:riak_object()) -> riak_dt_hll:card().
+hll_value(RObj) ->
+    simple_value(RObj, ?HLL_TYPE).
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
 -spec map_value(riak_object:riak_object()) -> proplists:proplist().
 map_value(RObj) ->
-    {{_Ctx, Map}, _Stats}  = value(RObj, ?MAP_TYPE),
-    Map.
+    simple_value(RObj, ?MAP_TYPE).
 
 %% @doc convenience function for (e.g.) Yokozuna. Checks the bucket props for
 %% the object, if it has a supported datatype entry, returns true; otherwise
@@ -165,10 +175,14 @@ crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
     {get_context(Type, Value), Type:value(Value)}.
 
 crdt_stats(_, error) -> [];
-crdt_stats(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
+crdt_stats(Type, {ok, {_Meta, ?CRDT{mod=?HLL_TYPE}}}=DType) ->
+    crdt_stats(Type, DType, ?HLL_STATS);
+crdt_stats(Type, {ok, _}=DType) ->
+    crdt_stats(Type, DType, ?DATATYPE_STATS_DEFAULTS).
+crdt_stats(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}, Stats) ->
     case lists:member({stat,2}, Type:module_info(exports)) of
         true ->
-            EnabledStats = app_helper:get_env(riak_kv, datatype_stats, ?DATATYPE_STATS_DEFAULTS),
+            EnabledStats = app_helper:get_env(riak_kv, datatype_stats, Stats),
             lists:foldr(fun(S, Acc) ->
                                 case Type:stat(S, Value) of
                                     undefined -> Acc;
@@ -256,8 +270,8 @@ counter_op(N) ->
 %% and risk precondition errors and unexpected behaviour.
 %%
 %% @see split_ops/1
--spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) ->
-                         orddict:orddict() | precondition_error().
+-spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() |
+                  non_neg_integer()) -> orddict:orddict() | precondition_error().
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     %% Handle legacy 1.4 counter operation, upgrade to current OP
     CounterOp = counter_op(Amt),
@@ -270,8 +284,8 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
             orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
         {error, _}=E -> E
     end;
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TYPE;
-                                                                    Mod==?SET_TYPE->
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx})
+  when Mod==?MAP_TYPE; Mod==?SET_TYPE; Mod==?HLL_TYPE ->
     case orddict:find(Mod, Dict) of
         error ->
             %% No local replica of this CRDT, apply the ops to a new
@@ -440,7 +454,9 @@ to_record(?COUNTER_TYPE, Val) ->
 to_record(?MAP_TYPE, Val) ->
     ?MAP_TYPE(Val);
 to_record(?SET_TYPE, Val) ->
-    ?SET_TYPE(Val).
+    ?SET_TYPE(Val);
+to_record(?HLL_TYPE, Val) ->
+    ?HLL_TYPE(Val).
 
 %% @doc Check cluster capability for crdt support
 supported(Mod) ->
@@ -470,6 +486,8 @@ crdt_version(Mod) ->
 %% CRDT type
 to_mod("sets") ->
     ?SET_TYPE;
+to_mod("hlls") ->
+    ?HLL_TYPE;
 to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
@@ -499,8 +517,6 @@ mod_map(map) ->
 mod_map(_) ->
     ?MOD_MAP.
 
-
-
 %% @doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
 %% a smaller than Type:to_binary(Value) binary context.
@@ -509,6 +525,12 @@ get_context(Type, Value) ->
         true -> riak_dt_vclock:to_binary(Type:precondition_context(Value));
         false -> <<>>
     end.
+
+%% @doc Helper fun to create crdt operation.
+-spec operation(DT_MOD::module(), riak_kv_crdt_json:all_type_op(),
+                undefined | riak_dt_vclock:vclock()) -> crdt_op().
+operation(Mod, Op, Ctx) ->
+    #crdt_op{mod=Mod, op=Op, ctx=Ctx}.
 
 %% ===================================================================
 %% EUnit tests
@@ -523,7 +545,7 @@ is_crdt_test_() ->
              meck:expect(riak_core_capability, get,
                          fun({riak_kv, crdt}, []) ->
                                  [pncounter,riak_dt_pncounter,riak_dt_orswot,
-                                  riak_dt_map];
+                                  riak_dt_hll, riak_dt_map];
                             (X, Y) -> meck:passthrough([X, Y]) end),
              ok
      end,
@@ -549,21 +571,26 @@ is_crdt_test_() ->
                              fun({<<"maps">>, _Name}) -> [{datatype, map}];
                                 ({<<"sets">>, _Name}) -> [{datatype, set}];
                                 ({<<"counters">>, _Name}) -> [{datatype, counter}];
+                                ({<<"hlls">>, _Name}) -> [{datatype, hll}];
                                 ({X, Y}) -> meck:passthrough([X, Y]) end),
                  Bucket1 = {<<"maps">>, <<"crdt">>},
                  Bucket2 = {<<"sets">>, <<"crdt">>},
                  Bucket3 = {<<"counters">>, <<"crdt">>},
+                 Bucket4 = {<<"hlls">>, <<"crdt">>},
                  BTPropsMap = riak_core_bucket:get_bucket(Bucket1),
                  BTPropsSet = riak_core_bucket:get_bucket(Bucket2),
                  BTPropsCounter = riak_core_bucket:get_bucket(Bucket3),
+                 BTPropsHll = riak_core_bucket:get_bucket(Bucket4),
                  ?assertEqual(map, proplists:get_value(datatype, BTPropsMap)),
                  ?assertEqual(set, proplists:get_value(datatype, BTPropsSet)),
                  ?assertEqual(counter,
                               proplists:get_value(datatype, BTPropsCounter)),
+                 ?assertEqual(hll, proplists:get_value(datatype, BTPropsHll)),
                  [?assert(is_crdt(riak_object:new(B, K, V)))
                   || {B, K, V} <- [{Bucket1, <<"k1">>, hi},
                                  {Bucket2, <<"k2">>, hey},
-                                 {Bucket3, <<"k3">>, hey}]]
+                                 {Bucket3, <<"k3">>, hey},
+                                 {Bucket4, <<"k4">>, hah}]]
 
              end)]}.
 
@@ -583,7 +610,8 @@ eqc_test_() ->
 prop_binary_roundtrip() ->
     ?FORALL({_Type, Mod}, oneof(?MOD_MAP),
             begin
-                {ok, ?CRDT{mod=SMod, value=SValue}} = from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
+                {ok, ?CRDT{mod=SMod, value=SValue}} =
+                    from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
                 conjunction([{module, equals(Mod, SMod)},
                              {value, Mod:equal(SValue, Mod:new())}])
             end).

@@ -31,13 +31,25 @@
 -export([start_link/0]).
 -export([init/1]).
 
+-include_lib("profiler/include/profiler.hrl").
+
 start_index_fsm(Node, Args) ->
+    profiler:perf_profile({start, 18, "supervisor:start_child"}),
+    profiler:perf_profile({start, 24, "5"}),
+
     case supervisor:start_child({?MODULE, Node}, Args) of
         {ok, Pid} ->
+	    profiler:perf_profile({stop, 24}),
+	    profiler:perf_profile({stop, 18}),
+	    profiler:perf_profile({start, 17, "riak_kv_stat:update"}),
             ok = riak_kv_stat:update({index_create, Pid}),
+	    profiler:perf_profile({stop, 17}),
             {ok, Pid};
         Error ->
+	    profiler:perf_profile({stop, 18}),
+	    profiler:perf_profile({start, 17, "riak_kv_stat:update"}),
             ok = riak_kv_stat:update(index_create_error),
+	    profiler:perf_profile({stop, 17}),
             Error
     end.
 

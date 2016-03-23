@@ -61,6 +61,8 @@
 -type riak_kv_index_fsm_dict() :: dict().
 -endif.
 
+-include_lib("profiler/include/profiler.hrl").
+
 -record(state, {from :: from(),
                 pagination_sort :: boolean(),
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
@@ -108,6 +110,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, riak_core_coverage_plan]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod]) ->
+    profiler:perf_profile({start, 21, ?FNNAME()}),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -122,6 +125,8 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, V
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
+    profiler:perf_profile({stop, 21, ?FNNAME()}),
+    profiler:perf_profile({start, 24, '5'}),
     {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, PlannerMod,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
@@ -156,6 +161,8 @@ process_results(VNode, {From, Bucket, Results}, State) ->
             {done, State2}
     end;
 process_results(VNode, {_Bucket, Results}, State = #state{pagination_sort=true}) ->
+    profiler:perf_profile({start, 11, ?FNNAME()}),
+
     #state{merge_sort_buffer=MergeSortBuffer, results_per_vnode=PerNode,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
@@ -165,17 +172,24 @@ process_results(VNode, {_Bucket, Results}, State = #state{pagination_sort=true})
     LenToSend = length(ToSend),
     {Response, ResultsLen, ResultsToSend} = get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
     send_results(ClientPid, ReqId, ResultsToSend),
+
+    profiler:perf_profile({stop, 11}),
+
     {Response, State#state{merge_sort_buffer=NewBuff,
                            results_per_vnode=NewPerNode,
                            results_sent=ResultsSent+ResultsLen}};
 process_results(VNode, done, State = #state{pagination_sort=true}) ->
+    profiler:perf_profile({start, 11, ?FNNAME()}),
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
+    profiler:perf_profile({stop, 11}),
     BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),
     {done, State#state{merge_sort_buffer=BufferWithNewResults}};
 process_results(_VNode, {_Bucket, Results}, State) ->
+    profiler:perf_profile({start, 11, ?FNNAME()}),
     #state{from={raw, ReqId, ClientPid}} = State,
     send_results(ClientPid, ReqId, Results),
+    profiler:perf_profile({stop, 11}),
     {ok, State};
 process_results(_VNode, done, State) ->
     {done, State}.
@@ -219,17 +233,22 @@ finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
     %% Notify the requesting client that an error
     %% occurred or the timeout has elapsed.
+    profiler:perf_profile({start, 19, ?FNNAME()}),
     ClientPid ! {ReqId, {error, Error}},
+    profiler:perf_profile({stop, 19}),
     {stop, normal, StateData};
 finish(clean,
        StateData=#state{from={raw, ReqId, ClientPid}, merge_sort_buffer=undefined}) ->
+    profiler:perf_profile({start, 19, ?FNNAME()}),
     ClientPid ! {ReqId, done},
+    profiler:perf_profile({stop, 19}),
     {stop, normal, StateData};
 finish(clean,
        State=#state{from={raw, ReqId, ClientPid},
                     merge_sort_buffer=MergeSortBuffer,
                     results_sent=ResultsSent,
                     max_results=MaxResults}) ->
+    profiler:perf_profile({start, 19, ?FNNAME()}),
     LastResults = sms:done(MergeSortBuffer),
     DownTheWire = case (ResultsSent + length(LastResults)) > MaxResults of
                       true ->
@@ -239,6 +258,7 @@ finish(clean,
                   end,
     ClientPid ! {ReqId, {results, DownTheWire}},
     ClientPid ! {ReqId, done},
+    profiler:perf_profile({stop, 19}),
     {stop, normal, State}.
 
 %% ===================================================================

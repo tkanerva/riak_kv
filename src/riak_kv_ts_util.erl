@@ -47,6 +47,8 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+-include_lib("profiler/include/profiler.hrl").
+
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
@@ -78,6 +80,8 @@ queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
 %% Check that Table is in good standing and ready for TS operations
 %% (its bucket type has been activated and it has a DDL in its props)
 get_table_ddl(Table) when is_binary(Table) ->
+    profiler:perf_profile({start, 5, ?FNNAME()}),
+    Ret = 
     case riak_core_bucket:get_bucket(table_to_bucket(Table)) of
         {error, _} = Error ->
             Error;
@@ -89,8 +93,9 @@ get_table_ddl(Table) when is_binary(Table) ->
                 DDL ->
                     {ok, Mod, DDL}
             end
-    end.
-
+    end,
+    profiler:perf_profile({stop, 5}),
+    Ret.
 
 %%
 -spec apply_timeseries_bucket_props(DDL::#ddl_v1{},

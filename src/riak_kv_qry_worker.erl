@@ -66,6 +66,8 @@
 -compile(export_all).
 -endif.
 
+-include_lib("profiler/include/profiler.hrl").
+
 -ifdef(PROF_QUERY).
 fakeQueryResp(one) ->
     {[<<"myfamily">>,<<"myseries">>,<<"time">>,<<"myint">>,<<"mybin">>,<<"myfloat">>,<<"mybool">>],
@@ -175,7 +177,10 @@ run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     run_sub_qs_fn(T).
 
 decode_results(KVList) ->
-    [extract_riak_object(V) || {_, V} <- KVList].
+    profiler:perf_profile({start, 29, ?FNNAME()}),
+    Ret = [extract_riak_object(V) || {_, V} <- KVList],
+    profiler:perf_profile({stop, 29}),
+    Ret.
 
 extract_riak_object(V) when is_binary(V) ->
     %% don't care about bkey
@@ -206,6 +211,7 @@ runSubQueryFn(RunSubQs, SubQs, _ReceiverPid, State) ->
 %%
 execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
               #state{ run_sub_qs_fn = RunSubQs } = State) ->
+    profiler:perf_profile({start, 7, ?FNNAME()}),
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
@@ -218,16 +224,20 @@ execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
                      sub_qrys     = Indices,
                      result       = InitialState },
 
-    runSubQueryFn(RunSubQs, SubQs, ReceiverPid, NextState).
+    Ret = runSubQueryFn(RunSubQs, SubQs, ReceiverPid, NextState),
+    profiler:perf_profile({stop, 7}),
+    Ret.
 
 %%
 add_subquery_result(SubQId, Chunk,
                     #state{qry      = Qry,
                            result   = QueryResult1,
                            sub_qrys = SubQs} = State) ->
+    profiler:perf_profile({start, 8, ?FNNAME()}),
     ?SQL_SELECT{'SELECT' = Sel} = Qry,
     #riak_sel_clause_v1{calc_type  = CalcType,
                         clause     = SelClause} = Sel,
+    Ret =
     case lists:member(SubQId, SubQs) of
         true ->
             DecodedChunk = decode_results(lists:flatten(Chunk)),
@@ -255,7 +265,9 @@ add_subquery_result(SubQId, Chunk,
         false ->
             %% discard; Don't touch state as it may have already 'finished'.
             State
-    end.
+    end,
+    profiler:perf_profile({stop, 8}),
+    Ret.
 
 %%
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
@@ -271,6 +283,8 @@ subqueries_done(QId,
                 #state{qid          = QId,
                        receiver_pid = ReceiverPid,
                        sub_qrys     = SubQQ} = State) ->
+    profiler:perf_profile({start, 9, ?FNNAME()}),
+    Ret = 
     case SubQQ of
         [] ->
             QueryResult2 = prepare_final_results(State),
@@ -282,7 +296,9 @@ subqueries_done(QId,
         _ ->
             % more sub queries are left to run
             State
-    end.
+    end,
+    profiler:perf_profile({stop, 9}),
+    Ret.
 
 -spec prepare_final_results(#state{}) ->
                                    {[riak_pb_ts_codec:tscolumnname()],

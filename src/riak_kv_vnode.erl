@@ -109,6 +109,8 @@
 -define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
 -endif.
 
+-include_lib("profiler/include/profiler.hrl").
+
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
                 reqid :: term(),
@@ -1947,8 +1949,10 @@ fold_extras_keys(Index, Bucket) ->
 %% can't handle results as fast as we can send them
 result_fun_ack(Bucket, Sender) ->
     fun(Items) ->
+	    profiler:perf_profile({start, 20, "riak_kv_vnode:result_fun_ack"}),
             Monitor = riak_core_vnode:monitor(Sender),
             riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, Items}),
+	    Ret =
             receive
                 {Monitor, ok} ->
                     erlang:demonitor(Monitor, [flush]);
@@ -1957,7 +1961,9 @@ result_fun_ack(Bucket, Sender) ->
                     throw(stop_fold);
                 {'DOWN', Monitor, process, _Pid, _Reason} ->
                     throw(receiver_down)
-            end
+            end,
+	    profiler:perf_profile({stop, 20}),
+	    Ret
     end.
 
 %% @doc If a listkeys request sends a result of `{From, Bucket,

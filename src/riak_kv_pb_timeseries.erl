@@ -37,6 +37,8 @@
          process/2,
          process_stream/3]).
 
+-include_lib("profiler/include/profiler.hrl").
+
 %-define(PROF_QUERY, 1).
 
 -ifdef(PROF_QUERY).
@@ -103,7 +105,9 @@ init() ->
                     {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
 decode(Code, Bin) ->
+    profiler:perf_profile({start, 4, ?FNNAME()}),
     Msg = riak_pb_codec:decode(Code, Bin),
+    Ret =
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
             %% convert error returns to ok's, this menas it will be passed into
@@ -129,7 +133,10 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_listkeys", Table}};
         #tscoveragereq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_cover", Table}}
-    end.
+    end,
+    profiler:perf_profile({stop, 4}),
+    Ret.
+
 
 -spec decode_query(Query::#tsinterpolation{}) ->
     {error, _} | {ok, ts_query_types()}.
@@ -672,6 +679,8 @@ compile(Mod, {ok, SQL}) ->
 %%
 
 sub_tsqueryreq(_Mod, DDL, SQL, State) ->
+    profiler:perf_profile({start, 3, ?FNNAME()}),
+    Ret =
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data} when element(1, SQL) =:= ?SQL_SELECT_RECORD_NAME ->
             {reply, make_tsqueryresp(Data), State};
@@ -695,8 +704,9 @@ sub_tsqueryreq(_Mod, DDL, SQL, State) ->
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
-    end.
-
+    end,
+    profiler:perf_profile({stop, 3}),
+    Ret.
 
 %% ---------------------------------------------------
 %% local functions

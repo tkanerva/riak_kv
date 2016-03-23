@@ -32,6 +32,8 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+-include_lib("profiler/include/profiler.hrl").
+
 %-define(PROF_QUERY, 1).
 
 -ifdef(PROF_QUERY).
@@ -134,17 +136,21 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
 maybe_await_query_results({error,_} = Error) ->
     Error;
 maybe_await_query_results(_) ->
+    profiler:perf_profile({start, 14, ?FNNAME()}),
     Timeout = app_helper:get_env(riak_kv, timeseries_query_timeout_ms),
 
     % we can't use a gen_server call here because the reply needs to be
     % from an fsm but one is not assigned if the query is queued.
+    Ret =
     receive
         Result ->
             Result
     after
         Timeout ->
             {error, qry_worker_timeout}
-    end.
+    end,
+    profiler:perf_profile({stop, 14}),
+    Ret.
 
 %% Format the multiple syntax errors into a multiline error
 %% message.

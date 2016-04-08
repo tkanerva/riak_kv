@@ -30,7 +30,7 @@
          format_query_syntax_errors/1
         ]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 -include_lib("profiler/include/profiler.hrl").
 
@@ -52,7 +52,7 @@ fakeQueryResp(none) ->
 -endif.
 
 %% No coverage plan for parallel requests
--spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
+-spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{}, ?DDL{}) ->
     {ok, any()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
@@ -68,17 +68,20 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 submit(#riak_sql_describe_v1{}, DDL) ->
     describe_table_columns(DDL);
 
+submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
+    {ok, SQL};
+
 submit(SQL = ?SQL_SELECT{}, DDL) ->
     maybe_submit_to_queue(SQL, DDL).
 
 %% ---------------------
 %% local functions
 
--spec describe_table_columns(#ddl_v1{}) ->
+-spec describe_table_columns(?DDL{}) ->
                                     {ok, [[binary() | boolean() | integer() | undefined]]}.
-describe_table_columns(#ddl_v1{fields = FieldSpecs,
-                               partition_key = #key_v1{ast = PKSpec},
-                               local_key     = #key_v1{ast = LKSpec}}) ->
+describe_table_columns(?DDL{fields = FieldSpecs,
+                            partition_key = #key_v1{ast = PKSpec},
+                            local_key     = #key_v1{ast = LKSpec}}) ->
     {ok,
      [[Name, list_to_binary(atom_to_list(Type)), Nullable,
        column_pk_position_or_blank(Name, PKSpec),
@@ -116,12 +119,12 @@ processQueries(Queries, DDL) ->
       riak_kv_qry_queue:put_on_queue(self(), Queries, DDL)).
 -endif.
 
-maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
+maybe_submit_to_queue(SQL, ?DDL{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
-    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+    case riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
         true ->
             case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
                 {error,_} = Error ->
@@ -166,8 +169,8 @@ format_query_syntax_errors(Errors) ->
 -include_lib("eunit/include/eunit.hrl").
 
 describe_table_columns_test() ->
-    {ok, DDL} =
-        riak_ql_parser:parse(
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
           riak_ql_lexer:get_tokens(
             "CREATE TABLE fafa ("
             " f varchar   not null,"

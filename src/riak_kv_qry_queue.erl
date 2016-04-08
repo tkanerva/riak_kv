@@ -48,7 +48,7 @@
         ]).
 
 -include("riak_kv_index.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -67,7 +67,7 @@
 %%% API
 %%%===================================================================
 
--spec put_on_queue(pid(), [qry()], #ddl_v1{}) ->
+-spec put_on_queue(pid(), [qry()], ?DDL{}) ->
         {ok, query_id()} | {error, term()}.
 %% @doc Enqueue a prepared query for execution.  The query should be
 %%      compatible with the DDL supplied.

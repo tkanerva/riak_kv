@@ -52,3 +52,6 @@
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
+
+%% Redis Default Yo Lolz.
+-define(HYPER_DEFAULT_PRECISION, 14).

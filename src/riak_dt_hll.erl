@@ -53,10 +53,8 @@
 %% Additional APIs for hyperloglog types
 -export([new/1, reduce/2, precision/1]).
 
--export_type([hllset/0, card/0]).
+-export_type([hllset/0, card/0, precision/0]).
 
-%% Redis Default Yo Lolz.
--define(HYPER_DEFAULT_PRECISION, 14).
 -define(HYPER_DEFAULT_BACKEND, hyper_binary).
 -define(STATS, [bytes, precision]).
 

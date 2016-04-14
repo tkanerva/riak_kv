@@ -48,7 +48,7 @@
 -define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2},
                                {?SET_TYPE, 2},
                                {?COUNTER_TYPE, 2},
-                               {?HLL_TYPE, 2}]).
+                               {?HLL_TYPE, 1}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.

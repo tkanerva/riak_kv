@@ -21,7 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_crdt).
-
 -export([update/3, merge/1, value/2, new/3,
          supported/1, to_mod/1, from_mod/1, from_mod/2,  mod_map/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
@@ -217,7 +216,8 @@ log_errors(Bucket, Key, Errors) ->
     lager:error("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
 
 maybe_log_sibling_crdts(Bucket, Key, CRDTs) when length(CRDTs) > 1 ->
-    lager:error("Sibling CRDTs at ~p ~p: ~p~n", [Bucket, Key, orddict:fetch_keys(CRDTs)]);
+    lager:error("Sibling CRDTs at ~p ~p: ~p~n",
+                [Bucket, Key, orddict:fetch_keys(CRDTs)]);
 maybe_log_sibling_crdts(_, _, _) ->
     ok.
 
@@ -392,6 +392,7 @@ to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
 to_binary(?CRDT{mod=Mod, value=Value}) ->
     %% Store the CRDT in the version that is negotiated cluster wide
     Version = crdt_version(Mod),
+    lager:info("Version Fuckers ~p\n", [Version]),
     {ok, CRDTBin} = Mod:to_binary(Version, Value),
     Type = atom_to_binary(Mod, latin1),
     TypeLen = byte_size(Type),

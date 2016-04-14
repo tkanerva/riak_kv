@@ -259,7 +259,7 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @doc Merge the contents and vclocks of OldObject and NewObject.
+%% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note: This function calls apply_updates on NewObject.
 %%       Depending on whether DVV is enabled or not, then may merge
 %%       dropping dotted and dominated siblings, otherwise keeps all
@@ -276,7 +276,8 @@ merge(OldObject, NewObject) ->
             merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
+                                                 [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -797,12 +798,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;

@@ -65,7 +65,8 @@
 %% Error macros pulled from riak_dt_tags.hrl
 -define(UNSUPPORTED_VERSION(Vers), {error, unsupported_version, Vers}).
 -define(INVALID_BINARY, {error, invalid_binary}).
--define(UNSUPPORTED_VERSION, {error, unsupported_version, Vers :: pos_integer()}).
+-define(UNSUPPORTED_VERSION, {error, unsupported_version,
+                              Vers :: pos_integer()}).
 
 
 -record(hyper, {p :: precision(),
@@ -131,7 +132,7 @@ to_binary(HllSet) ->
 
 -spec to_binary(Vers :: pos_integer(), hllset()) -> {ok, binary()} |
                                                    ?UNSUPPORTED_VERSION.
-to_binary(2, HllSet) ->
+to_binary(?V1_VERS, HllSet) ->
     B = to_binary(hyper:compact(HllSet)),
     {ok, B};
 to_binary(Vers, _HllSet) ->

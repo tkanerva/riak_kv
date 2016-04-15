@@ -57,6 +57,8 @@
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
+-type bucket_type()  :: binary().
+-type bucket_props() :: [{term(), term()}].
 
 %% ===================================================================
 %% Public API
@@ -238,15 +240,43 @@ determine_max_n(Ring) ->
 
 -spec determine_all_n(riak_core_ring()) -> [pos_integer(),...].
 determine_all_n(Ring) ->
+    BucketNVals = bucket_nvals(Ring),
+    BucketTypeNVals = bucket_type_nvals(),
+    ordsets:from_list(
+        ordsets:union(BucketNVals, BucketTypeNVals)
+    ).
+
+-spec bucket_nvals(riak_core_ring()) -> ordsets:ordset().
+bucket_nvals(Ring) ->
     Buckets = riak_core_ring:get_buckets(Ring),
-    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring) || Bucket <- Buckets],
+    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring)
+        || Bucket <- Buckets],
     Default = app_helper:get_env(riak_core, default_bucket_props),
     DefaultN = proplists:get_value(n_val, Default),
-    AllN = lists:foldl(fun(Props, AllN) ->
-                               N = proplists:get_value(n_val, Props),
-                               ordsets:add_element(N, AllN)
-                       end, [DefaultN], BucketProps),
+    AllN = lists:foldl(
+        fun bucket_prop_nval/2,
+        ordsets:from_list([DefaultN]), BucketProps),
     AllN.
+
+-spec bucket_type_nvals() -> ordsets:ordset().
+bucket_type_nvals() ->
+    riak_core_bucket_type:fold(fun bucket_type_prop_nval/2, ordsets:new()).
+
+-spec bucket_type_prop_nval({bucket_type(), bucket_props()}, ordsets:ordset()) ->
+    ordsets:ordset().
+bucket_type_prop_nval({_BType, BProps}, Accum) ->
+    bucket_prop_nval(BProps, Accum).
+
+-spec bucket_prop_nval(bucket_props(), ordsets:ordset()) ->
+    ordsets:ordset().
+bucket_prop_nval(BProps, Accum) ->
+    case proplists:get_value(n_val, BProps) of
+        undefined ->
+            Accum;
+        Value ->
+            ordsets:add_element(Value, Accum)
+    end.
+
 
 fix_incorrect_index_entries() ->
     fix_incorrect_index_entries([]).
